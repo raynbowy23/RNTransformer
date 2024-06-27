@@ -1,0 +1,2 @@
+python3 run_stg.py --num_timesteps_in 8 --num_timesteps_out 12 --epochs 100 --dataset eth --bs 128 --lr_sh_rate 150 --optimizer SGD --use_lrschd --model_name social_stgcnn \
+    --skip 1 --agg_frame 1 --grid 6 --uid 200 --is_preprocessed 

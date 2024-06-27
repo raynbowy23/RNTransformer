@@ -1,0 +1,1 @@
+python3.10 run.py --num_timesteps_in 8 --num_timesteps_out 12 --epochs 10 --dataset eth --optimizer SGD --is_preprocessed

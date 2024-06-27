@@ -1,0 +1,8 @@
+/logs/
+/runs/
+/figures/
+/datasets/
+/checkpoints/
+/__pycache__/
+/models/__pycache__/
+/pretrained/

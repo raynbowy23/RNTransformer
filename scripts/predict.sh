@@ -1,0 +1,1 @@
+python predict.py --dataset ind --playback_speed 4 --show_trajectory --show_future_trajectory --show_predicted_trajectory

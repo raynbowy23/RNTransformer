@@ -1,0 +1,2 @@
+# variable timesteps -> variable [8, 16, 32, 64]
+python3 test_rn.py --rn_num_timesteps_in 8 --rn_num_timesteps_out 12 --dataset eth --skip 1 --agg_frame 1 --grid 4 --is_rn --is_rn_preprocessed #--is_normalize

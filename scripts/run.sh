@@ -1,0 +1,2 @@
+# python run.py --num_timesteps_in 10 --num_timesteps_out 10 --epochs 60 --train_num 1 --test_num 1 --is_rn --temporal lstm --is_preprocessed --fusion lstm
+python3.10 run.py --num_timesteps_in 8 --num_timesteps_out 12 --epochs 10 --dataset eth --optimizer SGD
