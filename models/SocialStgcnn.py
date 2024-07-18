@@ -221,7 +221,8 @@ class ConvTemporalGraphical(nn.Module):
                  t_padding=0,
                  t_dilation=1,
                  bias=True,
-                 num_nodes=None):
+                 num_nodes=None,
+                 pred_seq_len=12):
         super(ConvTemporalGraphical,self).__init__()
         self.kernel_size = kernel_size
         self.conv = nn.Conv2d(
@@ -234,6 +235,7 @@ class ConvTemporalGraphical(nn.Module):
             bias=bias)
 
         # self.relu = nn.ReLU()
+        self.pred_seq_len = pred_seq_len
 
         # ### Road Network
         self.conv_rn = torch.nn.Conv1d(num_nodes, 8, kernel_size=1)
@@ -247,7 +249,12 @@ class ConvTemporalGraphical(nn.Module):
 
         # Mid Fusion
         if h != None:
-            weight = nn.Parameter(torch.randn(x.size(3), 6), requires_grad=True).to(x.device)
+            if self.pred_seq_len == 12:
+                weight = nn.Parameter(torch.randn(x.size(3), 6), requires_grad=True).to(x.device)
+            elif self.pred_seq_len == 18:
+                weight = nn.Parameter(torch.randn(x.size(3), 9), requires_grad=True).to(x.device)
+            elif self.pred_seq_len == 24:
+                weight = nn.Parameter(torch.randn(x.size(3), 12), requires_grad=True).to(x.device)
             out_rn = self.bn(F.relu(self.conv_rn(h.unsqueeze(0))))
             out_rn = out_rn.reshape(1, 2, 8, -1)
             out_rn = F.linear(out_rn, weight)
@@ -291,7 +298,8 @@ class st_gcn(nn.Module):
                  stride=1,
                  dropout=0,
                  residual=True,
-                 num_nodes=None):
+                 num_nodes=None,
+                 pred_seq_len=12):
         super(st_gcn, self).__init__()
         
         assert len(kernel_size) == 2
@@ -300,7 +308,7 @@ class st_gcn(nn.Module):
         self.use_mdn = use_mdn
 
         self.gcn = ConvTemporalGraphical(in_channels, out_channels,
-                                         kernel_size[1], num_nodes=num_nodes)
+                                         kernel_size[1], num_nodes=num_nodes, pred_seq_len=pred_seq_len)
         
 
         self.tcn = nn.Sequential(
@@ -356,9 +364,9 @@ class social_stgcnn(nn.Module):
         self.n_txpcnn = n_txpcnn
                 
         self.st_gcns = nn.ModuleList()
-        self.st_gcns.append(st_gcn(input_feat, output_feat, (kernel_size, seq_len), num_nodes=num_nodes))
+        self.st_gcns.append(st_gcn(input_feat, output_feat, (kernel_size, seq_len), num_nodes=num_nodes, pred_seq_len=pred_seq_len))
         for j in range(1, self.n_stgcnn):
-            self.st_gcns.append(st_gcn(output_feat,output_feat,(kernel_size, seq_len), num_nodes=num_nodes))
+            self.st_gcns.append(st_gcn(output_feat,output_feat,(kernel_size, seq_len), num_nodes=num_nodes, pred_seq_len=pred_seq_len))
         
         self.tpcnns = nn.ModuleList()
         self.tpcnns.append(nn.Conv2d(seq_len, pred_seq_len, 3, padding=1))
@@ -392,10 +400,6 @@ class social_stgcnn(nn.Module):
         v = self.tpcnn_output(v)
         # v = v.view(v.shape[0], v.shape[1], v.shape[3], v.shape[2])
         v = v.view(v.shape[0], v.shape[2], v.shape[1], v.shape[3])
-        '''
-        print(v.shape)
-        exit()
-        '''
         
         return v, v_mid, a
         # return v_mid, a

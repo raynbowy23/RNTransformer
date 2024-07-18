@@ -14,13 +14,14 @@ from torch.utils.tensorboard import SummaryWriter
 from utils.metrics import *
 from models.TrajectoryModel import *
 from models.LocalPedsTrajNet import *
+from models.SocialLSTM import *
+from models.SocialImplicit import *
 from models.simple import Simple
-# from models.tgcn import TimeHorizonGCN
 from models.SocialStgcnn import social_stgcnn
 from data_loader import inDDatasetGraph, TrajectoryDataset
 
 # Writer will output to ./runs/ directory by default
-writer_flg = True
+writer_flg = False
 if writer_flg:
     writer = SummaryWriter()
 
@@ -202,10 +203,10 @@ def load_data(opt):
 
 
 def graph_loss(V_pred, V_target):
-    return bivariate_loss(V_pred, V_target)
-    # return implicit_likelihood_estimation_fast_with_trip_geo(V_pred[:, :, :, 0:2], V_target)
-    # return implicit_likelihood_estimation_fast_with_trip_geo(V_pred, V_target)
-    # return ade_loss(V_pred, V_target, num_of_objs)
+    if opt.model_name == 'social_stgcnn' or opt.model_name == 'social_lstm':
+        return bivariate_loss(V_pred, V_target)
+    elif opt.model_name == 'social_implicit':
+        return implicit_likelihood_estimation_fast_with_trip_geo(V_pred, V_target)
 
 def mse_loss(V_pred, V_target):
     return torch.mean((V_pred - V_target)**2)
@@ -226,11 +227,9 @@ def train_peds(epoch, train_loader, train_rn_dataset=None, metrics=None):
     loss_batch = 0 
     batch_count = 0
     temp_batch_count = 0
-    is_fst_loss = True
     loss = 0
     loader_len = len(train_loader)
     rn_loss = 0
-    turn_point = int(loader_len / opt.bs) * opt.bs + loader_len % opt.bs - 1
     traj_pred = None
 
 
@@ -247,12 +246,15 @@ def train_peds(epoch, train_loader, train_rn_dataset=None, metrics=None):
         pbar.update(1)
         batch_count += 1
         rn_loss = 0
+        weight_rn = 1
         loc_data = []
         optimizer.zero_grad()
         # optimizer_rn.zero_grad()
 
         ### Train Local Peds Trajectory
         if opt.is_rn:
+            optimizer_rn.zero_grad()
+
             for tensor in batch[0]:
 
                 if not isinstance(tensor, list):
@@ -269,7 +271,7 @@ def train_peds(epoch, train_loader, train_rn_dataset=None, metrics=None):
                     loc_data.append(tensor)
 
         obs_traj, pred_traj_gt, obs_traj_rel, pred_traj_gt_rel, non_linear_ped,\
-         loss_mask, V_obs, A_obs, V_tr, A_tr, _, _ = loc_data
+         loss_mask, V_obs, A_obs, V_tr, A_tr, _, _, ped_list = loc_data
 
 
         # Forward
@@ -281,78 +283,49 @@ def train_peds(epoch, train_loader, train_rn_dataset=None, metrics=None):
             rn_edge_attr = [batch[i].edge_attr.to(device) for i in range(1, len(batch))]
 
             ### Model in one piece
-            rn_pred, out_loc, traj_pred = model(V_obs_tmp, A_obs, x, rn_edge_index, rn_edge_attr, i, h_=traj_pred)
-            # rn_pred, out_loc, traj_pred = model(V_obs_tmp, A_obs, x, rn_edge_index, rn_edge_attr, i)
-            out_loc = out_loc.permute(0, 2, 3, 1)
+            rn_pred, traj_pred = model(V_obs_tmp, A_obs, x, rn_edge_index, rn_edge_attr, i, ped_list=ped_list, h_=traj_pred)
+            # rn_pred, traj_pred = model(V_obs_tmp, A_obs, x, rn_edge_index, rn_edge_attr, i, ped_list=ped_list)
             ### Optional to add RN loss
             for j in range(len(rn_pred)):
                 # rn_loss += torch.mean((rn_pred[j] - y[j])**2)
                 rn_loss += huber_loss(rn_pred[j], y[j])
         else:
-            rn_pred, traj_pred, _ = model(V_obs_tmp, A_obs)
+            rn_pred, traj_pred = model(V_obs_tmp, A_obs, ped_list=ped_list)
+        
+        if opt.model_name != "social_lstm":
             traj_pred = traj_pred.permute(0, 2, 3, 1)
 
-        if batch_count % opt.bs != 0 and i != turn_point:
-            traj_loss = graph_loss(traj_pred, V_tr)
-            weight_rn = 1
-
-            if opt.is_rn:
-                loc_loss = graph_loss(out_loc, V_tr)
-                l = loc_loss + traj_loss + weight_rn * rn_loss + mse_loss(traj_pred[..., :2], V_tr)
-            else:
-                loc_loss = 0
-                l = traj_loss
-            if is_fst_loss :
-                loss = l
-                is_fst_loss = False
-            else:
-                loss += l
+        traj_loss = graph_loss(traj_pred, V_tr)
+        loc_loss = 0
+        lambda_l1 = 1e-5
+        lambda_l2 = 1e-5
+        l1_loss = sum(model.compute_l1_loss(param) for param in model.parameters())
+        l2_loss = sum(model.compute_l2_loss(param) for param in model.parameters())
+        if opt.is_rn:
+            # loc_loss = graph_loss(out_loc, V_tr)
+            loss += loc_loss + traj_loss + weight_rn * rn_loss + lambda_l1 * l1_loss + lambda_l2 * l2_loss #+ mse_loss(traj_pred[..., :2], V_tr)
         else:
+            loss += traj_loss
+
+        if batch_count % opt.bs == 0 and batch_count != 0:
             loss = loss / opt.bs
-            is_fst_loss = True
 
             loss.backward()
 
             if opt.clip_grad is not None:
-                torch.nn.utils.clip_grad_norm_(model.parameters(), opt.clip_grad)
+                torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=opt.clip_grad)
 
-            # optimizer_rn.step()
             optimizer.step()
+            if opt.is_rn:
+                optimizer_rn.step()
             # Metrics
             loss_batch += loss.item()
-            print('TRAIN:', '\t Epoch:', epoch, '\t Loss:', loss_batch / batch_count)
 
-    print("Epoch: {}, Train Loss - Total Loss: {:4f}, Road Loss: {:.4f}, Trajectory Loss: {:.4f}, Local Loss: {:.4f}".format(epoch, loss_batch / batch_count, rn_loss, traj_loss, loc_loss))
-    
+            loss = 0
+
+            # print('TRAIN:', '\t Epoch:', epoch, '\t Loss:', loss_batch / batch_count)
+    print("Epoch: {}, Valid Loss - Total Loss: {:4f}, Road Loss: {:.4f}, Trajectory Loss: {:.4f}, Local Loss: {:.4f}".format(epoch, loss_batch / batch_count, rn_loss, traj_loss, loc_loss))
     return rn_loss, traj_loss, loc_loss, loss
-
-
-@torch.no_grad()
-def test_sl(test_loader):
-    '''
-    Test function for Social LSTM. Should be integrated in the end
-    '''
-    mse = []
-    H = None
-
-    for idx, ((data, target), x_min, x_max, y_min, y_max) in tqdm(enumerate(test_loader)):
-        if idx > len(test_loader) - (opt.num_timesteps_in + opt.num_timesteps_out) + 1:
-            break
-        x_min, x_max, y_min, y_max = x_min[0], x_max[0], y_min[0], y_max[0]
-        data = data.to(device)
-
-        target = target.to(device)
-
-        pred = model(data)
-        # Normalization makes yCenter positive, so we need to make it negative
-        pred[:, 1] = -1 * pred[:, 1]
-
-        # logger.info(f'Target values: {target}')
-        # logger.info(f'Prediction results: {pred}')
-
-        mse.append((torch.mean((pred - target) ** 2)).cpu())
-
-    return float(torch.stack(mse, dim=0).mean())
 
 
 @torch.no_grad()
@@ -360,11 +333,9 @@ def valid_peds(epoch, val_loader, val_rn_dataset=None, metrics={}, constant_metr
     model.eval()
     loss_batch = 0 
     batch_count = 0
-    is_fst_loss = True
-    loader_len = len(val_loader)
-    turn_point =int(loader_len / opt.bs) * opt.bs + loader_len % opt.bs - 1
     rn_loss = 0
     traj_pred = None
+    loss = 0
 
     if opt.is_rn:
         if len(val_rn_dataset) == 1:
@@ -398,7 +369,7 @@ def valid_peds(epoch, val_loader, val_rn_dataset=None, metrics={}, constant_metr
                     loc_data.append(tensor)
 
         obs_traj, pred_traj_gt, obs_traj_rel, pred_traj_gt_rel, non_linear_ped,\
-         loss_mask, V_obs, A_obs, V_tr, A_tr, _, _ = loc_data
+         loss_mask, V_obs, A_obs, V_tr, A_tr, _, _, ped_list = loc_data
 
         # Forward
         V_obs_tmp = V_obs.permute(0, 3, 1, 2)
@@ -409,8 +380,7 @@ def valid_peds(epoch, val_loader, val_rn_dataset=None, metrics={}, constant_metr
             rn_edge_index = [batch[i].edge_index.to(device) for i in range(1, len(batch))]
             rn_edge_attr = [batch[i].edge_attr.to(device) for i in range(1, len(batch))]
 
-            rn_pred, out_loc, traj_pred = model(V_obs_tmp, A_obs, x, rn_edge_index, rn_edge_attr, i, h_=traj_pred)
-            out_loc = out_loc.permute(0, 2, 3, 1)
+            rn_pred, traj_pred = model(V_obs_tmp, A_obs, x, rn_edge_index, rn_edge_attr, i, ped_list=ped_list, h_=traj_pred)
 
             for j in range(len(rn_pred)):
                 # rn_loss += torch.mean((rn_pred[j] - y[j])**2).cpu()
@@ -418,29 +388,29 @@ def valid_peds(epoch, val_loader, val_rn_dataset=None, metrics={}, constant_metr
         else:
             if (V_obs_tmp.size(-1) == 0):
                 break
-            rn_pred, traj_pred, _ = model(V_obs_tmp, A_obs)
+            rn_pred, traj_pred = model(V_obs_tmp, A_obs, ped_list=ped_list)
+
+        if opt.model_name != "social_lstm":
             traj_pred = traj_pred.permute(0, 2, 3, 1)
 
-        weight_rn = 0.05
-        if batch_count % opt.bs != 0 and i != turn_point :
-            traj_loss = graph_loss(traj_pred, V_tr)
-            if opt.is_rn:
-                loc_loss = graph_loss(out_loc, V_tr)
-                l = loc_loss + traj_loss + weight_rn * rn_loss + mse_loss(traj_pred[..., :2], V_tr)
-            else:
-                loc_loss = 0
-                l = traj_loss
 
-            if is_fst_loss :
-                loss = l
-                is_fst_loss = False
-            else:
-                loss += l
+        traj_loss = graph_loss(traj_pred, V_tr)
+        loc_loss = 0
+        lambda_l1 = 1e-5
+        lambda_l2 = 1e-5
+        weight_rn = 1
+        l1_loss = sum(model.compute_l1_loss(param) for param in model.parameters())
+        l2_loss = sum(model.compute_l2_loss(param) for param in model.parameters())
+        if opt.is_rn:
+            # loc_loss = graph_loss(out_loc, V_tr)
+            loss += loc_loss + traj_loss + weight_rn * rn_loss + lambda_l1 * l1_loss + lambda_l2 * l2_loss #+ mse_loss(traj_pred[..., :2], V_tr)
         else:
+            loss += traj_loss
+
+        if batch_count % opt.bs == 0 and batch_count != 0:
             loss = loss / opt.bs
-            is_fst_loss = True
-            # Metrics
             loss_batch += loss.item()
+
             print('VALD: Epoch: {}, Loss: {}'.format(epoch, loss_batch / batch_count))
 
 
@@ -518,15 +488,14 @@ def main():
     elif opt.optimizer == "SGD":
         if opt.model_name == "trajectory_model":
             optimizer = torch.optim.SGD(model.parameters(), lr=1e-2, momentum=0.9)
-            # optimizer = torch.optim.SGD(model.parameters(), lr=1e-3, momentum=0.9, weight_decay=1e-3)
-            # optimizer = torch.optim.SGD(model.parameters(), lr=1e-4, momentum=0.9, weight_decay=1e-3)
         elif opt.model_name == "social_stgcnn":
-            # optimizer = torch.optim.SGD(model.parameters(), lr=1e-4, momentum=0.9, weight_decay=1e-3)
             optimizer = torch.optim.SGD(model.parameters(), lr=1e-2, weight_decay=1e-3)
         elif opt.model_name == "social_implicit":
             optimizer = torch.optim.SGD(model.parameters(), lr=1.0)
     elif opt.optimizer == "RMSProps":
         optimizer = torch.optim.RMSprop(model.parameters(), lr=1e-3, weight_decay=1e-3)
+    elif opt.optimizer == "AdaGrad":
+        optimizer = torch.optim.Adagrad(model.parameters(), weight_decay=5e-4)
     
     if opt.is_rn:
         optimizer_rn = torch.optim.RMSprop(model.model_rn.parameters(), lr=1e-3, weight_decay=1e-3)
@@ -553,13 +522,16 @@ def main():
             rn_loss, traj_loss, loc_loss, train_loss = train_peds(epoch=epoch, train_loader=train_loader, metrics=metrics)
             rn_val_loss, traj_val_loss, loc_val_loss, val_loss = valid_peds(epoch, val_loader, metrics=metrics, constant_metrics=constant_metrics)
 
-        writer.add_scalar("Train Loss/Road Network", rn_loss, epoch)
-        writer.add_scalar("Train Loss/Local Network", loc_loss, epoch)
-        writer.add_scalar("Train Loss/Trajectory Network", traj_loss, epoch)
+        if writer_flg:
+            writer.add_scalar("Train Loss/Road Network", rn_loss, epoch)
+            writer.add_scalar("Train Loss/Local Network", loc_loss, epoch)
+            writer.add_scalar("Train Loss/Trajectory Network", traj_loss, epoch)
+            writer.add_scalar("Train Loss/Whole Network", train_loss, epoch)
 
-        writer.add_scalar("Test Loss/Road Network", rn_val_loss, epoch)
-        writer.add_scalar("Test Loss/Local Network", loc_val_loss, epoch)
-        writer.add_scalar("Train Loss/Trajectory Network", traj_val_loss, epoch)
+            writer.add_scalar("Test Loss/Road Network", rn_val_loss, epoch)
+            writer.add_scalar("Test Loss/Local Network", loc_val_loss, epoch)
+            writer.add_scalar("Train Loss/Trajectory Network", traj_val_loss, epoch)
+            writer.add_scalar("Train Loss/Whole Network", val_loss, epoch)
 
         # logger.info('Epoch {}'.format(epoch))
 
@@ -580,10 +552,13 @@ def main():
                 torch.save(model.state_dict(), osp.join(opt.pretrained_dir, opt.model_name, opt.dataset, '{}_model_{}.pt'.format(opt.uid, epoch)))
             with open(osp.join(opt.pretrained_dir, opt.model_name, opt.dataset, 'constant_metrics.pkl'), 'wb') as fp:
                 pickle.dump(constant_metrics, fp)
+            with open(osp.join(opt.pretrained_dir, opt.model_name, opt.dataset, 'args.pkl'), 'wb') as fp:
+                pickle.dump(opt, fp)
 
 
         if opt.use_lrschd:
             scheduler.step()
+
 
 
 if __name__ == '__main__':

@@ -262,6 +262,7 @@ class TemporalGraphConvNeuralNetwork(torch.nn.Module):
         #     # H = transformed_tensor.view(1, 12, -1)
         # weight = nn.Parameter(torch.randn(H.size(1), 24), requires_grad=True).to(H.device)
 
+
         for period in range(self.periods):
             # H_accum = H_accum + self.conv(X[:, :, period], edge_index[period], edge_weight[period])
         #     # out = self._base_tgcn(
@@ -456,16 +457,18 @@ class RNTransformer(nn.Module):
 
         ### For Transformer
         self.layers = nn.ModuleList([])
+        '''
         for _ in range(self.depth):
             self.layers.append(nn.ModuleList([
                 # MultiHeadAttention(embed_dim=64*self.n_horizon, n_heads=self.n_horizon).cuda(),
                 MultiHeadAttention(embed_dim=4*self.n_horizon, n_heads=self.n_horizon).to(device),
                 FeedForward(embed_dim=4*self.n_horizon, hidden_dim=mlp_dim, dropout=dr).to(device)
             ]))
+        '''
+        self.to_latent = nn.Identity()
 
         self.rngcn_out = [_ for _ in range(self.n_horizon)]
 
-        self.to_latent = nn.Identity()
 
     def forward(self, x, edge_index, edge_attr, h=None):
         # Input should be three different timesteps (12, 24, 36) --> Different number of grids
@@ -487,15 +490,13 @@ class RNTransformer(nn.Module):
         # Dropout?
 
         ### Transformer -> No needed?
-        for attn, ff in self.layers:
-           rn_out = attn(rn_out) + rn_out 
-           rn_out = ff(rn_out) + rn_out
+        # for attn, ff in self.layers:
+        #    rn_out = attn(rn_out) + rn_out 
+        #    rn_out = ff(rn_out) + rn_out
 
         # Make head to decoding to original header size
         rn_out = self.to_latent(rn_out)
-        # return self.rngcn_out, rn_out
 
         return self.rngcn_out, self.mlp_head[0](rn_out), self.mlp_head[1](rn_out), self.mlp_head[2](rn_out)
-        # return self.rngcn_out, self.mlp_head[0](rn_out), self.mlp_head[1](rn_out), self.mlp_head[2](rn_out)
        
 

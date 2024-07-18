@@ -1,7 +1,7 @@
 /logs/
 /runs/
 /figures/
-/datasets/
+/datasets/sdd/
 /checkpoints/
 /__pycache__/
 /models/__pycache__/

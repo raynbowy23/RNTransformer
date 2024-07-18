@@ -107,6 +107,10 @@ torch.cuda.manual_seed(opt.seed)
 torch.backends.cudnn.determinstic = True
 torch.backends.cudnn.benchmark = False
 
+def huber_loss(rn_pred, rn_gt):
+    h_loss = torch.nn.HuberLoss('mean', delta=0.1)
+    return h_loss(rn_pred, rn_gt)
+
 
 def load_data(opt):
     dataset_dir = osp.join(opt.dataset_dir, opt.dataset)
@@ -213,10 +217,12 @@ def train_rn(train_rn_dataset):
         _, rn_out_list[0], rn_out_list[1], rn_out_list[2] = model_rn(x, edge_index, edge_attr)
 
         if len(rn_out_list) > 4:
-            loss += torch.mean((rn_out_list[0] - y[0])**2).cpu()
+            # loss += torch.mean((rn_out_list[0] - y[0])**2).cpu()
+            loss += huber_loss(rn_out_list[0], y[0]).cpu()
         else:
             for i in range(len(rn_out_list)):
-                loss += torch.mean((rn_out_list[i] - y[i])**2).cpu()
+                # loss += torch.mean((rn_out_list[i] - y[i])**2).cpu()
+                loss += huber_loss(rn_out_list[i], y[i]).cpu()
 
         step += 1
 

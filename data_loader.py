@@ -1351,6 +1351,7 @@ class TrajectoryDataset(Dataset):
         self.seq_list_rel = []
         self.loss_mask_list = []
         self.non_linear_ped = []
+        self.ped_list = []
 
         # List of data directories where raw data resides
         self.load_data_dir = osp.join('datasets', self.dataset, 'preprocessed', self.sdd_loc, self.train_mode)
@@ -1364,15 +1365,17 @@ class TrajectoryDataset(Dataset):
 
         if self.is_preprocessed:
             self.in_traj, self.pred_traj, self.in_traj_rel, self.pred_traj_rel, self.non_linear_ped, \
-                self.loss_mask, self.v_in, self.A_in, self.v_pred, self.A_pred, self.num_seq, self.seq_start_end, self.min_rel_pred, self.max_rel_pred = torch.load(f)
-            self.edge_index_list, self.edge_attr_list, self.node_data_list = torch.load(osp.join('datasets', self.dataset, 'preprocessed', self.sdd_loc, self.train_mode, 'roadnet_in{}_out{}_aggframe{}.pkl').format(self.in_channels, self.out_channels, self.agg_frame))
+                self.loss_mask, self.v_in, self.A_in, self.v_pred, self.A_pred, self.num_seq, self.seq_start_end, \
+                self.min_rel_pred, self.max_rel_pred, self.ped_list = torch.load(f)
+            if self.is_rn:
+                self.edge_index_list, self.edge_attr_list, self.node_data_list = torch.load(osp.join('datasets', self.dataset, 'preprocessed', self.sdd_loc, self.train_mode, 'roadnet_in{}_out{}_aggframe{}.pkl').format(self.in_channels, self.out_channels, self.agg_frame))
         else:
             if dataset_iter == 0:
                 self.set_trajnet_graph()
             if is_rn:
                 self.set_roadnet_graph()
                 _, _, _, _, _, \
-                    _, _, _, _, _, self.num_seq, _, _, _ = torch.load(f)
+                    _, _, _, _, _, self.num_seq, _, _, _, self.ped_list = torch.load(f)
 
 
     @property
@@ -1649,6 +1652,7 @@ class TrajectoryDataset(Dataset):
                 curr_loss_mask = np.zeros((len(peds_in_curr_seq), self.seq_len))
                 num_peds_considered = 0
                 _non_linear_ped = []
+                p_list = []
 
                 # Pedestrian trajectory graph
                 for _, ped_id in enumerate(peds_in_curr_seq):
@@ -1671,14 +1675,17 @@ class TrajectoryDataset(Dataset):
                     _non_linear_ped.append(
                         poly_fit(curr_ped_seq, self.out_channels, self.threshold))
                     curr_loss_mask[_idx, pad_front:pad_end] = 1
+                    p_list.append(ped_id)
                     num_peds_considered += 1
 
                 if num_peds_considered > 1:
+                    self.ped_list.append(p_list)
                     self.non_linear_ped += _non_linear_ped
                     self.num_peds_in_seq.append(num_peds_considered)
                     self.loss_mask_list.append(curr_loss_mask[:num_peds_considered])
                     self.seq_list.append(curr_seq[:num_peds_considered])
                     self.seq_list_rel.append(curr_seq_rel[:num_peds_considered])
+
 
         self.num_seq = len(self.seq_list)
         self.seq_list = np.concatenate(self.seq_list, axis=0)
@@ -1745,12 +1752,12 @@ class TrajectoryDataset(Dataset):
         if self.is_normalize:
             torch.save((self.in_traj, self.pred_traj, self.in_traj_rel, self.pred_traj_rel, 
                         self.non_linear_ped, self.loss_mask, self.v_in, self.A_in, self.v_pred, 
-                        self.A_pred, self.num_seq, self.seq_start_end, self.min_rel_pred, self.max_rel_pred),  
+                        self.A_pred, self.num_seq, self.seq_start_end, self.min_rel_pred, self.max_rel_pred, self.ped_list),  
                         osp.join('datasets', self.dataset, 'preprocessed', self.sdd_loc, self.train_mode, 'trajnet_normalize_in{}_out{}_aggframe{}.pkl').format(self.in_channels, self.out_channels, self.agg_frame))
         else:
             torch.save((self.in_traj, self.pred_traj, self.in_traj_rel, self.pred_traj_rel, 
                         self.non_linear_ped, self.loss_mask, self.v_in, self.A_in, self.v_pred, 
-                        self.A_pred, self.num_seq, self.seq_start_end, self.min_rel_pred, self.max_rel_pred),  
+                        self.A_pred, self.num_seq, self.seq_start_end, self.min_rel_pred, self.max_rel_pred, self.ped_list),  
                         osp.join('datasets', self.dataset, 'preprocessed', self.sdd_loc, self.train_mode, 'trajnet_unnormalize_in{}_out{}_aggframe{}.pkl').format(self.in_channels, self.out_channels, self.agg_frame))
 
 
@@ -1880,7 +1887,6 @@ class TrajectoryDataset(Dataset):
 
     def __getitem__(self, index):
 
-
         start, end = self.seq_start_end[index]
         out = [
             self.in_traj[start:end, :], self.pred_traj[start:end, :],
@@ -1889,6 +1895,7 @@ class TrajectoryDataset(Dataset):
             self.v_in[index], self.A_in[index],
             self.v_pred[index], self.A_pred[index],
             torch.stack(self.min_rel_pred)[index], torch.stack(self.max_rel_pred)[index],
+            self.ped_list[index],
         ]
         return out
 

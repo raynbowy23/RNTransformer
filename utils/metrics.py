@@ -436,3 +436,33 @@ def kde_lossf(gt, pred):
     if n_u_c == pred.shape[0] * pred.shape[1]:
         return 0
     return -kde_ll / (pred.shape[0] * pred.shape[1])
+
+def interpolate_traj(traj, num_interp=4):
+    '''
+    Add linearly interpolated points of a trajectory
+    '''
+    sz = traj.shape
+    dense = np.zeros((sz[0], (sz[1] - 1) * (num_interp + 1) + 1, 2))
+    dense[:, :1, :] = traj[:, :1]
+
+    for i in range(num_interp+1):
+        ratio = (i + 1) / (num_interp + 1)
+        dense[:, i+1::num_interp+1, :] = traj[:, 0:-1] * (1 - ratio) + traj[:, 1:] * ratio
+
+    return dense
+
+def compute_col(predicted_traj, predicted_trajs_all, thres=0.2):
+    '''
+    Input:
+        predicted_trajs: predicted trajectory of the primary agents, [12, 2]
+        predicted_trajs_all: predicted trajectory of all agents in the scene, [num_person, 12, 2]
+    '''
+    ph = predicted_traj.shape[0]
+    num_interp = 4
+    assert predicted_trajs_all.shape[0] > 1
+
+    dense_all = interpolate_traj(predicted_trajs_all, num_interp)
+    dense_ego = interpolate_traj(predicted_traj[None, :], num_interp)
+    distances = np.linalg.norm(dense_all - dense_ego, axis=-1)  # [num_person, 12 * num_interp]
+    mask = distances[:, 0] > 0  # exclude primary agent itself
+    return (distances[mask].min(axis=0) < thres)

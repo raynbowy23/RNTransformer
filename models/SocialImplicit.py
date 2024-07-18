@@ -9,7 +9,8 @@ class SocialCellLocal(nn.Module):
                  spatial_input=2,
                  spatial_output=2,
                  temporal_input=8,
-                 temporal_output=12):
+                 temporal_output=12,
+                 num_nodes=None):
         super(SocialCellLocal, self).__init__()
 
         #Spatial Section
@@ -32,7 +33,25 @@ class SocialCellLocal(nn.Module):
                                padding=1,
                                padding_mode='zeros')
 
-    def forward(self, v):
+        # self.rn_w = nn.Parameter(torch.zeros(1), requires_grad=True)
+
+        # ## Road Network
+        # temp_out = int(12 * (12 / temporal_output))
+        # self.conv_rn = torch.nn.Conv1d(num_nodes, temp_out, kernel_size=1)
+        # self.bn = torch.nn.BatchNorm1d(temp_out)
+        self.temporal_output = temporal_output
+
+    def forward(self, v, h=None):
+        KSTEP = 20
+        if h != None:
+            weight = nn.Parameter(torch.randn(v.size(3), 9), requires_grad=True).to(v.device)
+            out_rn = self.bn(F.relu(self.conv_rn(h.unsqueeze(0))))
+            out_rn = out_rn.reshape(1, 2, 8, -1)
+            out_rn = F.linear(out_rn, weight)
+            out_rn = out_rn.expand((KSTEP, 2, 8, -1)).reshape(v.shape[0] * v.shape[3], v.shape[1], v.shape[2])
+        else:
+            out_rn = 0
+
 
         v_shape = v.shape
         #Spatial Section
@@ -40,7 +59,10 @@ class SocialCellLocal(nn.Module):
                       2).reshape(v_shape[0] * v_shape[3], v_shape[1],
                                  v_shape[2])  #= PED*batch,  [x,y], TIME,
         v_res = self.highway_input(v)
-        v = self.feat_act(self.feat(v)) + v_res
+        if h != None:
+            v = self.feat_act(self.feat(v)) + v_res + self.rn_w * out_rn
+        else:
+            v = self.feat_act(self.feat(v)) + v_res
 
         #Temporal Section
         v = v.permute(0, 2, 1)
@@ -49,7 +71,7 @@ class SocialCellLocal(nn.Module):
 
         #Final Output
         v = v.permute(0, 2, 1).reshape(v_shape[0], v_shape[3], v_shape[1],
-                                       12).permute(0, 2, 3, 1)
+                                       self.temporal_output).permute(0, 2, 3, 1)
         return v
 
 
@@ -89,30 +111,27 @@ class SocialCellGlobal(nn.Module):
 
         self.global_w = nn.Parameter(torch.zeros(1), requires_grad=True)
         self.local_w = nn.Parameter(torch.zeros(1), requires_grad=True)
-        self.rn_w = nn.Parameter(torch.zeros(1), requires_grad=True)
 
         #Local Stream
         self.ped = SocialCellLocal(spatial_input=spatial_input,
                                    spatial_output=spatial_output,
                                    temporal_input=temporal_input,
-                                   temporal_output=temporal_output)
+                                   temporal_output=temporal_output,
+                                   num_nodes=num_nodes)
 
-        ### Road Network
-        self.conv_rn = torch.nn.Conv1d(num_nodes, 12, kernel_size=1)
-        self.bn = torch.nn.BatchNorm1d(12)
+        # self.rn_w = nn.Parameter(torch.randn(1), requires_grad=True)
+
+        # ## Road Network
+        # temp_out = int(12 * (12 / temporal_output))
+        # self.conv_rn = torch.nn.Conv1d(num_nodes, 8, kernel_size=1)
+        # self.bn = torch.nn.BatchNorm1d(8)
 
     def forward(self, v, noise, weight_select=1, h=None):
-        if h != None:
-            weight = nn.Parameter(torch.randn(v.size(3), 24), requires_grad=True).to(v.device)
-            out_rn = self.bn(F.relu(self.conv_rn(h.unsqueeze(0))))
-            out_rn = out_rn.reshape(1, 2, 12, -1)
-            out_rn = F.linear(out_rn, weight)
-
         #Combine Vectorized Noise
         v = v + self.noise_w * self.noise_weights[weight_select] * noise
 
         # Spatial Section
-        v_ped = self.ped(v)
+        v_ped = self.ped(v, h=h)
         v_res = self.highway_input(v)
         v = self.feat_act(self.feat(v)) + v_res
 
@@ -123,7 +142,7 @@ class SocialCellGlobal(nn.Module):
 
         # Fuse Local and Global Streams
         v = v.permute(0, 2, 1, 3)
-        v = self.global_w * v + self.local_w * v_ped + self.rn_w * out_rn
+        v = self.global_w * v + self.local_w * v_ped
         return v
 
 
@@ -139,6 +158,7 @@ class SocialImplicit(nn.Module):
         super(SocialImplicit, self).__init__()
 
         self.bins = torch.Tensor(bins).cuda()
+        self.temporal_output = temporal_output
 
         self.implicit_cells = nn.ModuleList([
             SocialCellGlobal(spatial_input=spatial_input,
@@ -168,7 +188,7 @@ class SocialImplicit(nn.Module):
             self.bins,
             right=True,
         ) - 1  # Used to set each vector to a zone
-        v_out = torch.zeros(KSTEPS, 2, 12, v.shape[-1]).to(
+        v_out = torch.zeros(KSTEPS, 2, self.temporal_output, v.shape[-1]).to(
             v.device).contiguous()  #Stores results of each zone
         # Per each Social-Zone, call the proper Social-Cell
         for i in range(len(self.bins)):

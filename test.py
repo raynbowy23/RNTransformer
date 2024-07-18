@@ -15,6 +15,7 @@ from models.LocalPedsTrajNet import *
 import copy
 from tqdm import tqdm
 import argparse
+from collections import OrderedDict
 
 import seaborn as sns
 
@@ -109,16 +110,6 @@ print("*"*50)
 print('Number of samples:', KSTEPS)
 print("*"*50)
 
-
-ade_ls = [] 
-fde_ls = [] 
-kde_ls = []
-amd_ls = []
-eig_ls = []
-
-print("*"*50)
-
-
 model_path = osp.join(opt.pretrained_dir, opt.model_name, opt.pretrained_file) # '/val_best.pth'
 
 # Data prep     
@@ -195,47 +186,245 @@ def load_data(opt):
         return test_loader
 
 
+def world2image(traj_w, H_inv):
+    # Converts points from Euclidean to homogeneous space, by (x, y) → (x, y, 1)
+    traj_homog = np.hstack((traj_w, np.ones((traj_w.shape[0], 1)))).T  
+    # to camera frame
+    traj_cam = np.matmul(H_inv, traj_homog)  
+    # to pixel coords
+    traj_uvz = np.transpose(traj_cam/traj_cam[2]) 
+    return traj_uvz[:, :2].astype(int)    
+
+def get_closer_index(key, query):
+    diff = np.linalg.norm(query - key, axis=-2).sum(-1)
+    argmin = np.argmin(diff,axis=0)
+    # print(diff[argmin], argmin, "\n",key,"\n",query[argmin])
+    return argmin
+
+def obtain_limits(model_data, normal_xy_ratio=True):
+    x_min = y_min = np.inf
+    x_max = y_max = -np.inf
+    for trajs in model_data.values():
+        sub_x_min = trajs[..., 0, :].min()
+        sub_x_max = trajs[..., 0, :].max()
+        sub_y_min = trajs[..., 1, :].min()
+        sub_y_max = trajs[..., 1, :].max()
+        x_min = min(x_min, sub_x_min)
+        x_max = max(x_max, sub_x_max)
+        y_min = min(y_min, sub_y_min)
+        y_max = max(y_max, sub_y_max)
+    x_len = x_max - x_min
+    y_len = y_max - y_min
+    
+    if normal_xy_ratio:
+        if x_len/y_len > 3.5/4.5:  # the x/y ratio of plot region in the figure is about 3.5/4.5. 
+            # y_len is too small
+            y_center = (y_max + y_min) / 2
+            y_len = x_len / 3.5 * 4.5
+            y_min = y_center - y_len / 2
+            y_max = y_center + y_len / 2
+        else:
+            # x_len is too small
+            x_center = (x_max + x_min) / 2
+            x_len = y_len / 4.5 * 3.5
+            x_min = x_center - x_len / 2
+            x_max = x_center + x_len / 2
+        
+    return [x_min, x_max], [y_min, y_max]
+
 def visualize(raw_data_dic_):
     '''
     Visualize trajectories (Prediction, Target, Observation)
     '''
 
-    seq = [1, 6, 9, 11]
+    # H = (np.loadtxt(os.path.join('datasets', 'eth', 'H.txt')))
+    # H_inv = np.linalg.inv(H)
+
+    seq = [3]
     # k = [0, 2, 12, 14]
+    color_codes = ['b', 'y', 'orange', 'm', 'k', 'c']
     k = [0, 0, 0, 0]
-    ped_id = 1
+    print(f'Sequence: {len(raw_data_dic_)}')
+    print(f'Modes: {raw_data_dic_[0].keys()}')
 
-    _, ax = plt.subplots(2, 2) 
+    # _, ax = plt.subplots(1, 1) 
+    # Image can be eth or eth2
+    img = plt.imread('figures/eth2.png')
+    model_obs, model_trgt, model_pred = [], [], []
 
-    print(len(raw_data_dic_))
+    for seq in range(len(raw_data_dic_)):
+        model_obs.append(raw_data_dic_[seq]['obs'])
+        model_trgt.append(raw_data_dic_[seq]['trgt'])
+        _pred = []
+        for i in range(len(raw_data_dic_[seq]['pred'])):
+            _pred.append(np.stack(raw_data_dic_[seq]['pred'][i]))
+        model_pred.append(_pred)
 
-    ax[0, 0].plot(raw_data_dic_[seq[0]]['obs'][:, ped_id, 0], raw_data_dic_[seq[0]]['obs'][:, ped_id, 1], color='g', lw=2., linestyle='-')
-    ax[0, 0].plot(raw_data_dic_[seq[0]]['pred'][k[0]][:, ped_id, 0], raw_data_dic_[seq[0]]['pred'][k[0]][:, ped_id, 1], color='b', lw=2., linestyle='-')
-    ax[0, 0].plot(raw_data_dic_[seq[0]]['trgt'][:, ped_id, 0], raw_data_dic_[seq[0]]['trgt'][:, ped_id, 1], color='r', lw=2., linestyle='-')
-    sns.kdeplot(x=raw_data_dic_[seq[0]]['pred'][k[0]][:, ped_id, 0], y=raw_data_dic_[seq[0]]['pred'][k[0]][:, ped_id, 1], fill=True, ax=ax[0, 0])
+    _model = {}
+    _model['obs'] = np.concatenate(model_obs, axis=1).squeeze()
+    _model['trgt'] = np.concatenate(model_trgt, axis=1).squeeze()
 
-    ax[0, 1].plot(raw_data_dic_[seq[1]]['obs'][:, ped_id, 0], raw_data_dic_[seq[1]]['obs'][:, ped_id, 1], color='g', lw=2., linestyle='-')
-    ax[0, 1].plot(raw_data_dic_[seq[1]]['pred'][k[1]][:, ped_id, 0], raw_data_dic_[seq[1]]['pred'][k[1]][:, ped_id, 1], color='b', lw=2., linestyle='-')
-    ax[0, 1].plot(raw_data_dic_[seq[1]]['trgt'][:, ped_id, 0], raw_data_dic_[seq[1]]['trgt'][:, ped_id, 1], color='r', lw=2., linestyle='-')
-    sns.kdeplot(x=raw_data_dic_[seq[1]]['pred'][k[1]][:, ped_id, 0], y=raw_data_dic_[seq[1]]['pred'][k[1]][:, ped_id, 1], fill=True, ax=ax[0, 1])
+    _model['trgt'] = _model['trgt'] - _model['obs'][..., 0:1]
+    full_traj = np.concatenate((_model['obs'], _model['trgt']), axis=-1)
+    _model['trgt_ref'] = (full_traj[..., 1:] - full_traj[..., :-1])[..., -opt.num_timesteps_out:]
 
-    print(raw_data_dic_[seq[2]]['obs'][:, ped_id, 1])
-    print(raw_data_dic_[seq[2]]['trgt'][:, ped_id, 1])
-    print(raw_data_dic_[seq[2]]['pred'][0][:, ped_id, 1])
-    ax[1, 0].plot(raw_data_dic_[seq[2]]['obs'][:, ped_id, 0], raw_data_dic_[seq[2]]['obs'][:, ped_id, 1], color='g', lw=2., linestyle='-')
-    ax[1, 0].plot(raw_data_dic_[seq[2]]['pred'][k[2]][:, ped_id, 0], raw_data_dic_[seq[2]]['pred'][k[2]][:, ped_id, 1], color='b', lw=2., linestyle='-')
-    ax[1, 0].plot(raw_data_dic_[seq[2]]['trgt'][:, ped_id, 0], raw_data_dic_[seq[2]]['trgt'][:, ped_id, 1], color='r', lw=2., linestyle='-')
-    sns.kdeplot(x=raw_data_dic_[seq[2]]['pred'][k[2]][:, ped_id, 0], y=raw_data_dic_[seq[2]]['pred'][k[2]][:, ped_id, 1], fill=True, ax=ax[1, 0])
+    _model['pred'] = np.transpose(
+        np.concatenate(model_pred, axis=2).squeeze(),
+        axes=(2, 0, 3, 1)) - _model['obs'][:, None, :, 0:1]
+    _model['obs'] = _model['obs'] - _model['obs'][..., 0:1]
 
-    ax[1, 1].plot(raw_data_dic_[seq[3]]['obs'][:, ped_id, 0], raw_data_dic_[seq[3]]['obs'][:, ped_id, 1], color='g', lw=2., linestyle='-')
-    ax[1, 1].plot(raw_data_dic_[seq[3]]['pred'][k[3]][:, ped_id, 0], raw_data_dic_[seq[3]]['pred'][k[3]][:, ped_id, 1], color='b', lw=2., linestyle='-')
-    ax[1, 1].plot(raw_data_dic_[seq[3]]['trgt'][:, ped_id, 0], raw_data_dic_[seq[3]]['trgt'][:, ped_id, 1], color='r', lw=2., linestyle='-')
-    sns.kdeplot(x=raw_data_dic_[seq[3]]['pred'][k[3]][:, ped_id, 0], y=raw_data_dic_[seq[3]]['pred'][k[3]][:, ped_id, 1], fill=True, ax=ax[1, 1])
+    print(len(_model['obs']))
+
+    collect = []
+    for key in range(len(_model['obs'])):
+        collect.append(OrderedDict())
+        key_value = _model['obs'][key]
+
+        key_model = get_closer_index(key_value, _model['obs'])
+        collect[-1]['Observation'] = _model['obs'][key]
+        collect[-1]['GroundTruth'] = _model['trgt'][key]
+        collect[-1]['Prediction'] = _model['pred'][key_model]
+
+    cmap = ['g', 'y', 'r', 'k', 'r']
+    indices = {}
+    # Indices: 0, 1, 2, 3, 4, 50, 57, 58, 59, 65
+    # indices['eth'] = [65] # indices for the visualization
+    # indices['eth'] = [i for i in range(57, 60)] # indices for the visualization
+    indices['eth'] = [0, 58, 59]
+    dset = 'eth'
+
+    # Iterate through each trajectory
+    _show = 2
+    for j, key in enumerate(indices[dset]):
+        fig, ax = plt.subplots(1, _show, figsize=(10, 5))  #,sharex=True, sharey=True)
+
+        if dset in ['eth', 'zara1']:
+            for model in collect[key].keys():
+                collect[key][model] = np.flip(collect[key][model], axis=-2)
+
+        for i in range(_show):
+            if i == 0:
+                ax[i].plot(collect[key]['Observation'][0],
+                        collect[key]['Observation'][1],
+                        '--o',
+                        label='Observation',
+                        color='b')
+                ax[i].plot(collect[key]['GroundTruth'][0],
+                        collect[key]['GroundTruth'][1],
+                        '--x',
+                        label='GroundTruth',
+                        color='orange')
+                ax[i].plot(collect[key]['Prediction'][0][0],
+                        collect[key]['Prediction'][0][1],
+                        '--x',
+                        label='Prediction',
+                        color='g')
+            else:
+                ax[i].plot(collect[key]['Observation'][0],
+                        collect[key]['Observation'][1], '--o',
+                        color='b')
+                ax[i].plot(collect[key]['GroundTruth'][0],
+                        collect[key]['GroundTruth'][1], '--x',
+                        color='orange')
+
+        x_limit, y_limit = obtain_limits(collect[key])
+
+        sns.kdeplot(x=collect[key]['Prediction'][:, 0].reshape(-1),
+                    y=collect[key]['Prediction'][:, 1].reshape(-1),
+                    fill=True,
+                    thresh=0.15,
+                    color='g',
+                    alpha=0.8,
+                    label=opt.model_name)
+
+        for i in range(_show):
+            ax[i].xaxis.set_tick_params(labelsize=14)
+            ax[i].yaxis.set_tick_params(labelsize=14)
+            ax[i].set_xlim(x_limit) 
+            ax[i].set_ylim(y_limit)
+
+        lines_labels = [ax.get_legend_handles_labels() for ax in fig.axes]
+        lines, labels = [sum(lol, []) for lol in zip(*lines_labels)]
+        fig.legend(lines,
+                labels,
+                loc="upper center",
+                ncol=7,
+                fontsize=15,
+                bbox_to_anchor=(0.5, 1.1))
+        plt.tight_layout()
+        plt.savefig(osp.join('../', 'figs', '{}_in{}_out_{}_pretrained{}_frames{}.png'.format(opt.model_name, opt.num_timesteps_in, opt.num_timesteps_out, opt.pretrained_epoch, key)),
+                dpi=300,
+                bbox_inches='tight')
+        plt.show()
+
+    # generate gt trajectory
+    # obs_traj = raw_data_dic_[0]['obs']
+    # pred_traj_gt = raw_data_dic_[0]['trgt']
+    # n_levels = 30
+    # V_gt = torch.cat((obs_traj, pred_traj_gt), dim=3).squeeze(dim=0).permute(2, 0, 1)
+
+    # # trajectory sampling
+    # mu, cov = generate_statistics_matrices(V_pred.squeeze(dim=0))
+    # mv_normal = multivariate_normal.MultivariateNormal(mu, cov)
+    # V_smpl = mv_normal.sample((samples,))
+
+    # # relative points to absolute points
+    # V_absl = []
+    # for t in range(V_smpl.size(1)):
+    #     V_absl.append(V_smpl[:, 0:t+1, :, :].sum(dim=1, keepdim=True) + V_gt[7, :, :])
+    # V_absl = torch.cat(V_absl, dim=1)
+
+    # # visualize trajectories
+    # V_absl_temp = V_absl.view(-1, V_absl.size(2), 2)[:, :, :].cpu().numpy()
+    # V_gt_temp = V_gt[:, :, :].cpu().numpy()
+
+    # fig = plt.figure(figsize=(10, 7))
+
+    # for n in range(V_smpl.size(2)):
+    #     ax = sns.kdeplot(V_absl_temp[:, n, 0], V_absl_temp[:, n, 1], n_levels=n_levels, shade=True, shade_lowest=False)
+    #     plt.plot(V_gt_temp[:, n, 0], V_gt_temp[:, n, 1], linestyle='--', color='C{}'.format(n), linewidth=1)
+
+    # ax.tick_params(axis="y", direction="in", pad=-22)
+    # ax.tick_params(axis="x", direction="in", pad=-15)
+    # plt.xlim(-14, 36)
+    # plt.ylim(-9, 26)
+    # plt.tight_layout()
+
+    plt.close()
+
+
+    # for ped_id in range(raw_data_dic_[seq[0]]['obs'].shape[1]):
+
+    #     # world2image((raw_data_dic_[seq[0]]['obs']), H_inv)  # TRAJ: Tx2 numpy array
+    #     ax.plot(raw_data_dic_[seq[0]]['obs'][:, ped_id, 0], raw_data_dic_[seq[0]]['obs'][:, ped_id, 1], color='g', lw=2., linestyle='-.')
+    #     ax.plot(raw_data_dic_[seq[0]]['pred'][k[0]][:, ped_id, 0], raw_data_dic_[seq[0]]['pred'][k[0]][:, ped_id, 1], color='b', lw=2., linestyle='-.')
+    #     ax.plot(raw_data_dic_[seq[0]]['trgt'][:, ped_id, 0], raw_data_dic_[seq[0]]['trgt'][:, ped_id, 1], color='r', lw=2., linestyle='-.')
+    #     sns.kdeplot(x=raw_data_dic_[seq[0]]['pred'][k[0]][:, ped_id, 0], y=raw_data_dic_[seq[0]]['pred'][k[0]][:, ped_id, 1], fill=True, ax=ax, color='c')
+    
+
+    # ax[0, 1].plot(raw_data_dic_[seq[1]]['obs'][:, ped_id, 0], raw_data_dic_[seq[1]]['obs'][:, ped_id, 1], color='g', lw=2., linestyle='-')
+    # ax[0, 1].plot(raw_data_dic_[seq[1]]['pred'][k[1]][:, ped_id, 0], raw_data_dic_[seq[1]]['pred'][k[1]][:, ped_id, 1], color='b', lw=2., linestyle='-')
+    # ax[0, 1].plot(raw_data_dic_[seq[1]]['trgt'][:, ped_id, 0], raw_data_dic_[seq[1]]['trgt'][:, ped_id, 1], color='r', lw=2., linestyle='-')
+    # sns.kdeplot(x=raw_data_dic_[seq[1]]['pred'][k[1]][:, ped_id, 0], y=raw_data_dic_[seq[1]]['pred'][k[1]][:, ped_id, 1], fill=True, ax=ax[0, 1])
+
+    # print(raw_data_dic_[seq[2]]['obs'][:, ped_id, 1])
+    # print(raw_data_dic_[seq[2]]['trgt'][:, ped_id, 1])
+    # print(raw_data_dic_[seq[2]]['pred'][0][:, ped_id, 1])
+    # ax[1, 0].plot(raw_data_dic_[seq[2]]['obs'][:, ped_id, 0], raw_data_dic_[seq[2]]['obs'][:, ped_id, 1], color='g', lw=2., linestyle='-')
+    # ax[1, 0].plot(raw_data_dic_[seq[2]]['pred'][k[2]][:, ped_id, 0], raw_data_dic_[seq[2]]['pred'][k[2]][:, ped_id, 1], color='b', lw=2., linestyle='-')
+    # ax[1, 0].plot(raw_data_dic_[seq[2]]['trgt'][:, ped_id, 0], raw_data_dic_[seq[2]]['trgt'][:, ped_id, 1], color='r', lw=2., linestyle='-')
+    # sns.kdeplot(x=raw_data_dic_[seq[2]]['pred'][k[2]][:, ped_id, 0], y=raw_data_dic_[seq[2]]['pred'][k[2]][:, ped_id, 1], fill=True, ax=ax[1, 0])
+
+    # ax[1, 1].plot(raw_data_dic_[seq[3]]['obs'][:, ped_id, 0], raw_data_dic_[seq[3]]['obs'][:, ped_id, 1], color='g', lw=2., linestyle='-')
+    # ax[1, 1].plot(raw_data_dic_[seq[3]]['pred'][k[3]][:, ped_id, 0], raw_data_dic_[seq[3]]['pred'][k[3]][:, ped_id, 1], color='b', lw=2., linestyle='-')
+    # ax[1, 1].plot(raw_data_dic_[seq[3]]['trgt'][:, ped_id, 0], raw_data_dic_[seq[3]]['trgt'][:, ped_id, 1], color='r', lw=2., linestyle='-')
+    # sns.kdeplot(x=raw_data_dic_[seq[3]]['pred'][k[3]][:, ped_id, 0], y=raw_data_dic_[seq[3]]['pred'][k[3]][:, ped_id, 1], fill=True, ax=ax[1, 1])
+
     # X, Y = torch.meshgrid(raw_data_dic_[0]['pred'][k][:, ped_id, 0], raw_data_dic_[0]['pred'][k][:, ped_id, 1])
     # plt.contourf(X, Y, pdf, cmap='virdis')
 
-
-    plt.show()
+    # ax.imshow(img, extent=[0, 10, 0, 10])
+    # plt.show()
 
 
 def graph_loss(V_pred, V_target):
@@ -248,6 +437,8 @@ def test(test_loader, test_rn_dataset=None, KSTEPS=20):
     # ade_bigls = []
     ade_bigls = [[] for _ in range(4)]
     fde_bigls = []
+    coll_bigls = []
+    coll_step_bigls = []
     raw_data_dict = {}
     traj_pred = None
     loss = 0
@@ -279,7 +470,7 @@ def test(test_loader, test_rn_dataset=None, KSTEPS=20):
                 if not isinstance(tensor, list):
                     loc_data.append(tensor.to(device))
                 else:
-                    loc_data.append(tensor.to(device))
+                    loc_data.append(tensor)
             # loc_data = [tensor.to(device) for tensor in batch[0][:-3]]
             # Get data
             x = [batch[i].x.to(device) for i in range(1, len(batch))]
@@ -290,10 +481,10 @@ def test(test_loader, test_rn_dataset=None, KSTEPS=20):
                 if not isinstance(tensor, list):
                     loc_data.append(tensor.to(device))
                 else:
-                    loc_data.append(tensor.to(device))
+                    loc_data.append(tensor)
 
         obs_traj, pred_traj_gt, obs_traj_rel, pred_traj_gt_rel, non_linear_ped,\
-         loss_mask, V_obs, A_obs, V_tr, A_tr, min_rel_pred, max_rel_pred = loc_data
+         loss_mask, V_obs, A_obs, V_tr, A_tr, min_rel_pred, max_rel_pred, ped_list = loc_data
 
         num_of_objs = obs_traj_rel.shape[1]
         V_obs_tmp = V_obs.permute(0, 3, 1, 2)
@@ -306,18 +497,20 @@ def test(test_loader, test_rn_dataset=None, KSTEPS=20):
 
             ### Model in one piece
             # rn_pred, traj_pred = model(V_obs_tmp, A_obs, x, rn_edge_index, rn_edge_attr, h_=traj_pred)
-            rn_pred, out_loc, traj_pred = model(V_obs_tmp, A_obs, x, rn_edge_index, rn_edge_attr)
-            out_loc = out_loc.permute(0, 2, 3, 1)
+            rn_pred, traj_pred = model(V_obs_tmp, A_obs, x, rn_edge_index, rn_edge_attr, ped_list=ped_list)
             # rn_pred, traj_pred, _ = model(V_obs_tmp, A_obs, x, rn_edge_index, rn_edge_attr)
         else:
             if (V_obs_tmp.size(-1) == 0):
                 break
-            rn_pred, traj_pred, _ = model(V_obs_tmp, A_obs)
+            rn_pred, traj_pred = model(V_obs_tmp, A_obs, ped_list=ped_list)
             # rn_pred, traj_pred, _ = model(V_obs_tmp, A_obs)
             # traj_pred, _ = model(V_obs_tmp, A_obs.squeeze())
+
+        if opt.model_name != "social_lstm":
             traj_pred = traj_pred.permute(0, 2, 3, 1)
 
-        traj_loss = graph_loss(traj_pred, V_tr)
+        # traj_loss = graph_loss(traj_pred, V_tr)
+        traj_loss = 0
         loss += traj_loss
 
         V_tr = V_tr.squeeze()
@@ -325,15 +518,10 @@ def test(test_loader, test_rn_dataset=None, KSTEPS=20):
         traj_pred = traj_pred.squeeze() #.float()
         # traj_pred = out_loc.squeeze() #.float()
         num_of_objs = obs_traj_rel.shape[1]
-        V_obs = V_obs[:, :num_of_objs, :]
-
-
-        # For now I have my bi-variate parameters 
-        #normx =  V_pred[:,:,0:1]
-        #normy =  V_pred[:,:,1:2]
+        # V_obs = V_obs[:, :num_of_objs, :]
 
         if opt.model_name != "social_implicit":
-            traj_pred, V_tr = traj_pred[:, :num_of_objs, :], V_tr[:, :num_of_objs, :]
+            # traj_pred, V_tr = traj_pred[:, :num_of_objs, :], V_tr[:, :num_of_objs, :]
             sx = torch.exp(traj_pred[:, :, 2]) #sx
             sy = torch.exp(traj_pred[:, :, 3]) #sy
             corr = torch.tanh(traj_pred[:, :, 4]) #corr
@@ -346,8 +534,8 @@ def test(test_loader, test_rn_dataset=None, KSTEPS=20):
             mean = traj_pred[:, :, 0:2]
             
             mvnormal = torchdist.MultivariateNormal(mean, cov)
-        else:
-            traj_pred, V_tr = traj_pred[:, :, :num_of_objs, :], V_tr[:, :num_of_objs, :]
+        # else:
+        #     traj_pred, V_tr = traj_pred[:, :, :num_of_objs, :], V_tr[:, :num_of_objs, :]
 
         # traj_pred, V_tr = traj_pred[:, :, :num_of_objs, :], V_tr[:, :num_of_objs, :]
 
@@ -359,34 +547,47 @@ def test(test_loader, test_rn_dataset=None, KSTEPS=20):
         fde_ls = {}
         V_x = seq_to_nodes(obs_traj.data.cpu().numpy().copy())
 
-        if opt.is_visualize and opt.dataset == "eth":
-            ### Unnormalized
-            V_x_rel_to_abs = seq_to_nodes(obs_traj.data.cpu().numpy().copy())
-        else:
-            ### Normalized
-            # V_x_rel_to_abs = seq_to_nodes(obs_traj.data.cpu().numpy().copy())
-            V_x_rel_to_abs = nodes_rel_to_nodes_abs(V_obs.data.cpu().numpy().squeeze().copy(),
-                                                    V_x[0, :, :].copy())
+        # if opt.is_visualize and opt.dataset == "eth":
+        #     ### Unnormalized
+        #     V_x_rel_to_abs = seq_to_nodes(obs_traj.data.cpu().numpy().copy())
+        # else:
+        #     ### Normalized
+        #     # V_x_rel_to_abs = seq_to_nodes(obs_traj.data.cpu().numpy().copy())
+        #     V_x_rel_to_abs = nodes_rel_to_nodes_abs(V_obs.data.cpu().numpy().squeeze().copy(),
+        #                                             V_x[0, :, :].copy())
+        V_x_rel_to_abs = seq_to_nodes(obs_traj.data.cpu().numpy().copy())
+        # V_x_rel_to_abs = nodes_rel_to_nodes_abs(V_obs.data.cpu().numpy().squeeze(),
+        #                                         V_x[0, :, :].copy())
 
         V_y = seq_to_nodes(pred_traj_gt.data.cpu().numpy().copy())
-        if opt.is_visualize and opt.dataset == "eth":
-            ### Unnormalized
-            V_y_rel_to_abs = seq_to_nodes(pred_traj_gt.data.cpu().numpy().copy())
-        else:
-            ### Normalized
-            # V_y_rel_to_abs = seq_to_nodes(pred_traj_gt.data.cpu().numpy().copy())
-            V_y_rel_to_abs = nodes_rel_to_nodes_abs(V_tr.data.cpu().numpy().squeeze().copy(),
-                                                        V_x[-1, :, :].copy())
+        # if opt.is_visualize and opt.dataset == "eth":
+        #     ### Unnormalized
+        #     V_y_rel_to_abs = seq_to_nodes(pred_traj_gt.data.cpu().numpy().copy())
+        # else:
+        #     ### Normalized
+        #     # V_y_rel_to_abs = seq_to_nodes(pred_traj_gt.data.cpu().numpy().copy())
+        #     V_y_rel_to_abs = nodes_rel_to_nodes_abs(V_tr.data.cpu().numpy().squeeze().copy(),
+        #                                                 V_x[-1, :, :].copy())
+        V_y_rel_to_abs = nodes_rel_to_nodes_abs(V_tr.data.cpu().numpy().squeeze(),
+                                                    V_x[-1, :, :].copy())
 
         
         raw_data_dict[i] = {}
-        raw_data_dict[i]['obs'] = copy.deepcopy(V_x_rel_to_abs)
-        raw_data_dict[i]['trgt'] = copy.deepcopy(V_y_rel_to_abs)
+        # if i == 0:
+        #     print(obs_traj)
+        #     print(pred_traj_gt)
+        raw_data_dict[i]['obs'] = copy.deepcopy(obs_traj.data.cpu().numpy().copy())
+        raw_data_dict[i]['trgt'] = copy.deepcopy(pred_traj_gt.data.cpu().numpy().copy())
         raw_data_dict[i]['pred'] = []
 
         ade_ls = [[[] for _ in range(num_of_objs)] for _ in range(4)]
         # ade_ls = [[] for _ in range(num_of_objs)]
         fde_ls = [[] for _ in range(num_of_objs)]
+        coll_ls = {}
+        coll_step_ls = {}
+        for n in range(num_of_objs):
+            coll_ls[n] = []
+            coll_step_ls[n] = []
 
 
         b_samples = []
@@ -397,8 +598,8 @@ def test(test_loader, test_rn_dataset=None, KSTEPS=20):
             else:
                 V_pred = mvnormal.sample()
 
-            if opt.is_visualize and opt.dataset == "eth":
-                V_pred = min_max_unnormalize(V_pred, min_rel_pred, max_rel_pred)
+            # if opt.is_visualize and opt.dataset == "eth":
+            #     V_pred = min_max_unnormalize(V_pred, min_rel_pred, max_rel_pred)
 
             V_pred_rel_to_abs = nodes_rel_to_nodes_abs(V_pred.data.cpu().numpy().squeeze().copy(),
                                                      V_x[-1, :, :].copy())
@@ -424,6 +625,20 @@ def test(test_loader, test_rn_dataset=None, KSTEPS=20):
                 ade_ls[3][n].append(ade3)
                 fde_ls[n].append(fde(pred, target, number_of))
 
+                predicted_traj = V_pred_rel_to_abs[:, n, :].copy()
+                predicted_trajs_all = V_pred_rel_to_abs[:, :, :].copy().transpose(1, 0, 2)
+
+                col_mask = compute_col(predicted_traj, predicted_trajs_all).astype(np.float64)  # [56]
+                if col_mask.sum():
+                    coll_ls[n].append(1)
+                else:
+                    coll_ls[n].append(0)
+
+                coll_step_ls[n].append(col_mask)
+
+        for key, coll_step_data in zip(coll_step_ls.keys(), coll_step_ls.values()):
+            coll_step_ls[key] = np.stack(coll_step_data, axis=0)  # [X, 56]
+
         # abs_samples = np.concatenate(b_samples, axis=2)  #ab samples in (12,3,100,2) gt in (12,3,2)
 
         # m, nan_list, n_u, m_c, eig = calc_amd_amv(V_y_rel_to_abs.copy(),
@@ -441,6 +656,17 @@ def test(test_loader, test_rn_dataset=None, KSTEPS=20):
             ade_bigls[2].append(min(ade_ls[2][n]))
             ade_bigls[3].append(min(ade_ls[3][n]))
             fde_bigls.append(min(fde_ls[n]))
+            coll_bigls.append(sum(coll_ls[n]) / len(coll_ls[n]))
+
+        coll_step_bigls.append(np.concatenate([ls for ls in coll_step_ls.values()], axis=0))  # [X, 56]
+
+    coll_raw_ = np.concatenate(coll_step_bigls, axis=0)  # [X, 56]
+    coll_step_ = np.mean(coll_raw_, axis=0)  # [56]
+    coll_step_ = coll_step_[:-1].reshape(-1, 5).mean(axis=1)  # [11]
+    coll_cumulative_ = np.asarray([np.mean(coll_raw_[:, :i * 5 + 6].max(axis=1)) for i in range(11)])  # [11]
+
+    coll_ = sum(coll_bigls) / len(coll_bigls)
+
     print(f'Loss: {traj_loss / cnt}')
 
     # ade1_ = sum(ade_bigls) / len(ade_bigls)
@@ -451,11 +677,20 @@ def test(test_loader, test_rn_dataset=None, KSTEPS=20):
     fde_ = sum(fde_bigls) / len(fde_bigls)
 
     # return ade1_, fde_, raw_data_dict
-    return ade1_, ade2_, ade3_, ade4_, fde_, raw_data_dict #, #sum(kde_loss) / len(kde_loss), sum(mabs_loss) / len(mabs_loss), sum(eig_collect) / len(eig_collect), raw_data_dict
+    return ade1_, ade2_, ade3_, ade4_, fde_, coll_, coll_cumulative_, raw_data_dict #, #sum(kde_loss) / len(kde_loss), sum(mabs_loss) / len(mabs_loss), sum(eig_collect) / len(eig_collect), raw_data_dict
 
 
 
 if __name__ == '__main__':
+
+
+    ade_ls = [] 
+    fde_ls = [] 
+    kde_ls = []
+    amd_ls = []
+    eig_ls = []
+    coll_ls = []
+
     h = None
     out_list = [1, 4, 8]
     # out_list = [4, 8, 16]
@@ -484,7 +719,7 @@ if __name__ == '__main__':
     if opt.model_name == "Simple":
         model = Simple(in_channels=opt.num_timesteps_in, out_channels=opt.num_timesteps_out,
                     num_timesteps_in=opt.num_timesteps_in, is_horizontal_pred=opt.is_horizontal_pred).to(device)
-    elif opt.model_name == "trajectory_model" or opt.model_name == "social_stgcnn" or opt.model_name == "social_implicit":
+    else:
         model_rn = None
         model_loc = None
         # model_rn = RNTransformer(node_features=7, num_nodes=num_nodes, periods=opt.num_timesteps_in, output_dim_list=out_list, device=device).to(device)
@@ -504,8 +739,12 @@ if __name__ == '__main__':
         else:
             model.load_state_dict(torch.load(osp.join(opt.pretrained_dir, opt.model_name, opt.dataset, '{}_val_best.pt'.format(opt.uid))))
     else:
+        if opt.dataset == 'sdd':
+            d_name = 'sdd'
+        else:
+            d_name = 'eth'
         if opt.is_rn:
-            model.load_state_dict(torch.load(osp.join(opt.pretrained_dir, opt.model_name, 'eth', '{}_model_grid{}_epoch{}.pt'.format(opt.uid, opt.grid, opt.pretrained_epoch))))
+            model.load_state_dict(torch.load(osp.join(opt.pretrained_dir, opt.model_name, opt.dataset, '{}_model_grid{}_epoch{}.pt'.format(opt.uid, opt.grid, opt.pretrained_epoch))))
         else:
             model.load_state_dict(torch.load(osp.join(opt.pretrained_dir, opt.model_name, opt.dataset, '{}_model_{}.pt'.format(opt.uid, opt.pretrained_epoch))))
 
@@ -531,25 +770,27 @@ if __name__ == '__main__':
         if opt.is_rn:
             # ad, fd, kd, md, eg, raw_data_dic_= test(test_loader, test_rn_dataset)
             # ad, fd, raw_data_dic_= test(test_loader, test_rn_dataset)
-            ad, ad2, ad3, ad4, fd, raw_data_dic_= test(test_loader, test_rn_dataset)
+            ad, ad2, ad3, ad4, fd, coll_, coll_cum, raw_data_dic_= test(test_loader, test_rn_dataset)
         else:
             # ad, fd, kd, md, eg, raw_data_dic_= test(test_loader)
             # ad, fd, raw_data_dic_= test(test_loader)
-            ad, ad2, ad3, ad4, fd, raw_data_dic_= test(test_loader)
+            ad, ad2, ad3, ad4, fd, coll_, coll_cum, raw_data_dic_= test(test_loader)
         ade_ = min(ade_, ad)
         fde_ = min(fde_, fd)
         ade_ls.append(ade_)
         fde_ls.append(fde_)
+        coll_ls.append(coll_)
         # kde_ls.append(kd)
         # amd_ls.append(md)
         # eig_ls.append(eg)
-        print("ADE:", ade_, " FDE:", fde_) #, "AMD:", md, "KDE:", kd, "AMV:", eg)
+        print("ADE:", ade_, " FDE:", fde_, " Coll:", coll_) #, "AMD:", md, "KDE:", kd, "AMV:", eg)
 
     print("*"*50)
 
     print("Avg ADE:", sum(ade_ls) / test_num)
-    print("ADE First Period: {}, Second Period: {}, Third Period: {}".format(ad2, ad3, ad4))
+    print("ADE First Period: {} Second Period: {} Third Period: {}".format(ad2, ad3, ad4))
     print("Avg FDE:", sum(fde_ls) / test_num)
+    print("Avg Coll:", sum(coll_ls) / test_num)
     # print("Avg AMD:", sum(amd_ls) / test_num)
     # print("Avg MDE:", sum(kde_ls) / test_num)
     # print("Avg AMV:", sum(eig_ls) / test_num)
