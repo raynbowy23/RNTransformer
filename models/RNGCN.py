@@ -1,14 +1,9 @@
-import math
-from icecream import ic
-from einops import rearrange, repeat
+from einops import rearrange
 
 import torch
 import torch.nn as nn
-from torch import Tensor
-from torch.nn import Parameter
 import torch.nn.functional as F
-from torch_geometric.nn import GCNConv, ChebConv
-from torch_geometric.nn.inits import glorot, zeros
+from torch_geometric.nn import GCNConv
 
 
 class TGCN(torch.nn.Module):
@@ -172,17 +167,7 @@ class TemporalGraphConvNeuralNetwork(torch.nn.Module):
         self._setup_layers()
 
     def _setup_layers(self):
-        # self.conv = GCNConv(
-        #     in_channels=self.in_channels,
-        #     out_channels=self.out_channels,
-        #     improved=self.improved,
-        #     cached=self.cached,
-        #     add_self_loops=self.add_self_loops,
-        # )
-        # self.gru = torch.nn.GRU(
-        #     input_size=self.out_channels,
-        #     hidden_size=self.out_channels
-        # )
+
         self._base_tgcn = TGCN(
             in_channels=self.in_channels,
             out_channels=self.out_channels,
@@ -192,36 +177,6 @@ class TemporalGraphConvNeuralNetwork(torch.nn.Module):
         )
         device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
         self._attention = torch.nn.Parameter(torch.empty(self.periods, device=device))
-
-    #     self._weight_att1 = torch.nn.Parameter(torch.normal(mean=0.0, std=0.1, size=(self.out_channels, 1), requires_grad=True))
-    #     self._weight_att2 = torch.nn.Parameter(torch.normal(mean=0.0, std=0.1, size=(self.num_nodes, 1), requires_grad=True))
-    #     self._bias_att1 = torch.nn.Parameter(torch.normal(mean=0.0, std=1.0, size=(1, 1), requires_grad=True))
-    #     self._bias_att2 = torch.nn.Parameter(torch.normal(mean=0.0, std=1.0, size=(1, 1), requires_grad=True))
-
-        # self.conv_first = nn.Conv2d(in_channels=12, out_channels=16, kernel_size=(1, 1), padding=(2, 0))
-
-
-    # def attention(self, x, period) -> torch.FloatTensor:
-    #     '''
-    #     Attention module from original code implementation
-    #     '''
-    #     input_x = x
-    #     x = torch.matmul(torch.reshape(x, [-1, self.out_channels]), self._weight_att1) + self._bias_att1 # [num_nodes, 1]
-
-    #     f = torch.matmul(torch.reshape(x, [-1, self.num_nodes]), self._weight_att2) + self._bias_att2 # [1, 1]
-    #     g = torch.matmul(torch.reshape(x, [-1, self.num_nodes]), self._weight_att2) + self._bias_att2
-    #     h = torch.matmul(torch.reshape(x, [-1, self.num_nodes]), self._weight_att2) + self._bias_att2
-
-    #     f1 = f.squeeze(0).expand(self.periods)
-    #     h1 = h.squeeze(0).expand(self.periods)
-    #     g1 = g.squeeze(0).expand(self.periods)
-    #     s = g1 * f1
-
-    #     beta = torch.nn.functional.softmax(s, dim=-1)
-
-    #     context = beta[period] * input_x
-
-    #     return context, beta    
 
     def forward(
         self,
@@ -247,38 +202,11 @@ class TemporalGraphConvNeuralNetwork(torch.nn.Module):
         """
         H_accum = 0
         probs = torch.nn.functional.softmax(self._attention, dim=0)
-        # if H is None:
-        #     H = torch.zeros(X.shape[0], 8).to(X.device)
-        # else:
-        #     self.weight = nn.Parameter(torch.randn(16, H.size(2) * H.size(3)), requires_grad=True).to(X.device)
-        #     # print(self.conv_first(H.permute(0, 2, 1, 3)).shape)
-        #     # [36, out_channels, 1, 1]
-        #     H = F.conv2d(H, weight=nn.Parameter(torch.randn(6*6, 12, 1, 1), requires_grad=True).to(X.device)).reshape(1, 6*6, -1)
-        #     # H = self.conv_first(H).reshape(1, 16, -1)
-        #     H = F.linear(H, self.weight)
-        #     # H = F.linear(H, (16, H.size(-1)))
-        #     # H = H.view(1, 16, 16)
-        #     # transformed_tensor = H.permute(0, 2, 1, 3).contiguous().view(1, -1, 5)
-        #     # H = transformed_tensor.view(1, 12, -1)
-        # weight = nn.Parameter(torch.randn(H.size(1), 24), requires_grad=True).to(H.device)
-
 
         for period in range(self.periods):
-            # H_accum = H_accum + self.conv(X[:, :, period], edge_index[period], edge_weight[period])
-        #     # out = self._base_tgcn(
-        #     #     X[:, :, period], edge_index[period], edge_weight[period], H
-        #     # )
-        #     # H_accum = H_accum + self.attention(out, period)[0]
-
             H_accum = H_accum + probs[period] * self._base_tgcn(
                 X[:, :, period], edge_index[period], edge_weight[period]
             )
-
-        #     # out = self.conv(X[:, :, period], edge_index[period], edge_weight[period]).unsqueeze(0)
-        #     # out, h = self.gru(F.linear(torch.cat((self.conv(X[:, :, period], edge_index[period], edge_weight[period]), H), dim=-1), weight))
-        #     # H_accum = H_accum + probs[period] * out
-        #     # out, h = self.gru(self.conv(X[:, :, period], edge_index[period], edge_weight[period]))
-        #     # H_accum = H_accum + probs[period] * out
 
         return H_accum
 
@@ -295,9 +223,6 @@ class RoadNetworkGCN(torch.nn.Module):
     """
     def __init__(self, node_features, num_nodes, periods, output_dim):
         super(RoadNetworkGCN, self).__init__()
-        # Attention Temporal Graph Convolutional Cell + Regional concat feature
-        # hidden_dim = 256
-        # out_channels = 512
         hidden_dim = 8
         out_channels = 16
         self.periods = periods
@@ -368,10 +293,6 @@ class MultiHeadAttention(nn.Module):
 
         project_out = not (self.n_heads == 1 and self.single_head_dim == embed_dim)
 
-        # Key, query and value matrices 64 x 64
-        # self.query_matrix = nn.Linear(self.single_head_dim, self.single_head_dim, bias=False)
-        # self.key_matrix = nn.Linear(self.single_head_dim, self.single_head_dim, bias=False)
-        # self.value_matrix = nn.Linear(self.single_head_dim, self.single_head_dim, bias=False)
         self.out = nn.Sequential(
             nn.Linear(inner_dim, self.embed_dim),
             nn.Dropout(self.dr)
@@ -390,7 +311,6 @@ class MultiHeadAttention(nn.Module):
         """
 
         x = self.norm(x)
-        # road grid matrix x flatten vectors, 64 x 96
         qkv = self.to_qkv(x).chunk(3, dim=-1)
         q, k, v = map(lambda t: rearrange(t, 'n (h d) -> h n d', h=self.n_heads), qkv)
 
@@ -420,7 +340,6 @@ class RNTransformer(nn.Module):
         super(RNTransformer, self).__init__()
 
         hidden_dim = 256
-        # self.out_channels = 512
         self.periods = periods
         self.num_nodes = num_nodes
         self.output_dim_list = output_dim_list
@@ -429,10 +348,7 @@ class RNTransformer(nn.Module):
 
         # assert isinstance(self.output_dim_list, list)
         for i in range(0, self.n_horizon):
-        #     self.output_dim_list[i] = int(self.output_dim_list[i])
-            # self.flatten[i] = nn.Linear(self.output_dim_list[i], 64).to(device) # Adjust features into same size
             self.flatten[i] = nn.Linear(self.output_dim_list[i], 4).to(device) # Adjust features into same size
-        # self.output_dim_list.sort()
         
         self.rngcn = nn.ModuleList()
         self.mlp_head = nn.ModuleList()
@@ -445,7 +361,6 @@ class RNTransformer(nn.Module):
                     output_dim=self.output_dim_list[i]
                 )
             )
-            # self.mlp_head.append(nn.Linear(64 * self.n_horizon, self.output_dim_list[i]))
             head_seq = nn.Sequential(
                 nn.Linear(4*self.n_horizon, self.output_dim_list[i]),
                 # nn.ReLU(),
@@ -455,48 +370,40 @@ class RNTransformer(nn.Module):
 
         self.depth = 1 # Temporaly
 
-        ### For Transformer
+        ### Transformer
         self.layers = nn.ModuleList([])
-        '''
         for _ in range(self.depth):
             self.layers.append(nn.ModuleList([
-                # MultiHeadAttention(embed_dim=64*self.n_horizon, n_heads=self.n_horizon).cuda(),
                 MultiHeadAttention(embed_dim=4*self.n_horizon, n_heads=self.n_horizon).to(device),
                 FeedForward(embed_dim=4*self.n_horizon, hidden_dim=mlp_dim, dropout=dr).to(device)
             ]))
-        '''
         self.to_latent = nn.Identity()
 
         self.rngcn_out = [_ for _ in range(self.n_horizon)]
 
 
     def forward(self, x, edge_index, edge_attr, h=None):
-        # Input should be three different timesteps (12, 24, 36) --> Different number of grids
-        # Ouput also should be three different timesteps (12, 24, 36)
-
-        # rn_out = self.rngcn[0](x[0], edge_index[0], edge_attr[0], h=h)
-        # road grid (8x8) and time horizon, 64x2, 64x4, 64x8
-        # rn_out = self.rngcn[0](x[0], edge_index[0], edge_attr[0], h=h)
-        # rn_out = self.rngcn[0](x, edge_index, edge_attr, h=h)
-
         for i in range(self.n_horizon):
             # Needs to be flatten
             self.rngcn_out[i] = self.flatten[i](self.rngcn[i](x[i], edge_index[i], edge_attr[i], h=h))
-            # self.rngcn_out[i] = self.flatten[i](self.rngcn[i](x, edge_index, edge_attr))
         rn_out = torch.cat(self.rngcn_out, axis=1)
 
 
-        # Pos embedding?
-        # Dropout?
+        # TODO: Add Pos embedding and Dropout
 
-        ### Transformer -> No needed?
-        # for attn, ff in self.layers:
-        #    rn_out = attn(rn_out) + rn_out 
-        #    rn_out = ff(rn_out) + rn_out
+        ## Transformer
+        for attn, ff in self.layers:
+           rn_out = attn(rn_out) + rn_out 
+           rn_out = ff(rn_out) + rn_out
 
         # Make head to decoding to original header size
         rn_out = self.to_latent(rn_out)
 
-        return self.rngcn_out, self.mlp_head[0](rn_out), self.mlp_head[1](rn_out), self.mlp_head[2](rn_out)
+        if self.n_horizon == 1:
+            return self.rngcn_out, self.mlp_head[0](rn_out)
+        elif self.n_horizon == 2:
+            return self.rngcn_out, self.mlp_head[0](rn_out), self.mlp_head[1](rn_out)
+        elif self.n_horizon == 3:
+            return self.rngcn_out, self.mlp_head[0](rn_out), self.mlp_head[1](rn_out), self.mlp_head[2](rn_out)
        
 

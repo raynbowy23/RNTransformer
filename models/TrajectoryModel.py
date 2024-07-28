@@ -1,21 +1,11 @@
 import torch
 import torch.nn as nn
-from torch.nn.init import xavier_uniform_
 from einops import rearrange
 
 from models.SocialStgcnn import social_stgcnn
 from models.SocialImplicit import SocialImplicit
 from models.SocialLSTM import SocialModel
 from models.RNGCN import RNTransformer
-from models.LocalPedsTrajNet import *
-
-import matplotlib.pyplot as plt
-from sklearn.decomposition import PCA
-
-
-# class PositionalEncoding(nn.Module):
-#     def __init__(self, d_model: int, dropout: float=0.1, max_length: int=5000):
-
 
 class FeedForward(nn.Module):
     def __init__(self, dim, hidden_dim, dropout = 0.):
@@ -43,10 +33,6 @@ class Attention(nn.Module):
         self.scale = dim_head ** -0.5
         self.dim_head = dim_head
 
-        # self.norm_k = nn.LayerNorm(dim_head)
-        # self.norm_q = nn.LayerNorm(dim_head)
-        # self.norm_v = nn.LayerNorm(dim_head)
-
         self.attend = nn.Softmax(dim = -1)
         self.dropout = nn.Dropout(dropout)
 
@@ -57,7 +43,6 @@ class Attention(nn.Module):
         self.value_matrix = nn.Linear(self.dim_head, self.dim_head, bias=False)
 
         self.to_out = nn.Sequential(
-            # nn.Linear(inner_dim, dim),
             nn.Linear(self.dim_head, dim),
             nn.Dropout(dropout)
         ) if project_out else nn.Identity()
@@ -65,22 +50,9 @@ class Attention(nn.Module):
         self.norm = nn.LayerNorm(dim)
 
     def forward(self, x, value=None, key=None, query=None):
-        # batch_size = vk.size(0)
-        # seq_length = vk.size(2)
-        # print(vk.shape)
 
-        # value, key = map(lambda t: rearrange(t, 'b n (h d) -> b h n d', h=self.heads), vk)
-
-    #     # key = key.view(batch_size, seq_length, self.heads, self.dim_head)
-    #     value = value.view(batch_size, seq_length, self.heads, self.dim_head)
-    #     # query = query.view(batch_size, seq_length, self.heads, self.dim_head)
-
-        # key = self.norm_k(key)
-        # query = self.norm_q(query)
-        # value = self.norm_v(value)
         if value == None or key == None or query == None:
             x = self.norm_ini(x)
-            # road grid matrix x flatten vectors, 64 x 96
             qkv = self.to_qkv(x).squeeze().chunk(3, dim=-1)
             q, k, v = map(lambda t: rearrange(t, 'n (h d) -> h n d', h=1), qkv)
         else:
@@ -95,7 +67,6 @@ class Attention(nn.Module):
 
         out = torch.matmul(attn, v)
         return self.norm(self.to_out(out))
-        # out = rearrange(out, 'b h n d -> b n ()')
 
 
 
@@ -148,60 +119,16 @@ class TrajectoryModel(nn.Module):
                 self.model_loc = model_loc
             else:
                 self.model_loc = social_stgcnn(1, 5, output_feat=5, seq_len=in_channels, pred_seq_len=out_channels, num_nodes=num_nodes).to(device)
-        elif self.model_name == "trajectory_model":
-            self.model_loc = LocalPedsTrajNet(seq_len=out_channels, num_nodes=num_nodes, device=device).to(device)
         elif self.model_name == "social_implicit":
             self.model_loc = SocialImplicit(temporal_output=out_channels, num_nodes=num_nodes).to(device)
         elif self.model_name == "social_lstm":
             self.model_loc = SocialModel(seq_len=out_channels, is_rn=is_rn).to(device)
-        # elif self.model_name == "trajnet++":
-        #     self.model_loc = TrajNetPlusPlus(num_nodes=num_nodes, device=device).to(device)
-
-        # dim_head = self.out_channels
         self.is_rn = is_rn
-        # self.rn_out_dim = sum(out_list)
-        # ff_in_channels = sum(out_list) * out_channels 
-        # self.ff_transformer_loc = FFTransformer(dim=ff_in_channels, depth=depth, heads=heads, dim_head=dim_head, mlp_dim=mlp_dim, dropout=dropout, step=0).to(device)
-        # self.local_mlp_head1 = torch.nn.Linear(self.rn_out_dim * 5 * 2, self.rn_out_dim * 2) # Cross-attention
-        # self.local_mlp_head2 = torch.nn.Linear(self.rn_out_dim * 2, 5) # Cross-attention
-        # self.residual = torch.nn.Conv2d(out_channels, out_channels, kernel_size=(1, 1))
-        # self.norm = nn.LayerNorm(5)
-        '''
-        if self.is_rn:
-            ### First argument should be the minimum size of road network
-            # self.conv_rn = torch.nn.Conv1d(num_nodes, 2, kernel_size=1)
-            self.conv_rn = torch.nn.Conv1d(num_nodes, 5, kernel_size=1)
-            self.rn_in_dim = 8
-            ff_in_channels = self.rn_out_dim * out_channels 
-            # ff_in_channels = self.rn_out_dim * in_channels 
-            # ff_in_channels = self.rn_out_dim * in_channels # If only use encoder from the local model
-            self.ff_transformer_loc = FFTransformer(dim=ff_in_channels, depth=depth, heads=heads, dim_head=dim_head, mlp_dim=mlp_dim, dropout=dropout, step=0).to(device)
-            # self.ff_transformer_rn = FFTransformer(dim=ff_in_channels, depth=depth, heads=heads, dim_head=dim_head, mlp_dim=mlp_dim, dropout=dropout, step=0).to(device)
-            # self.ff_transformer = FFTransformer(dim=ff_in_channels, depth=depth, heads=heads, dim_head=dim_head, mlp_dim=mlp_dim, dropout=dropout, step=1).to(device)
-
-            # self.local_mlp_head = torch.nn.Linear(self.rn_out_dim * 5 * 2, 5) # Cross-attention
-            # self.rn_mlp_head = torch.nn.Linear(self.rn_out_dim * 1, self.rn_out_dim * 1)
-            # self.rn_mlp_head = torch.nn.Linear(self.rn_out_dim * 5 * 2, self.rn_out_dim * 1)
-
-            self.residual = torch.nn.Conv2d(out_channels, out_channels, kernel_size=(1, 1))
-            self.linear_rn = torch.nn.Linear(13, out_channels)
-
-            self.rn_norm = nn.LayerNorm(out_channels)
-            self.norm = nn.LayerNorm(5)
-        '''
-
-        # self._reset_parameters()
+      
         if self.is_rn:
             self.linear_rn = torch.nn.Linear(13, out_channels)
 
             self.rn_norm = nn.LayerNorm(out_channels)
-
-
-    def _reset_parameters(self):
-        r"""Initiate parameters in the transformer model."""
-        for p in self.parameters():
-            if p.dim() > 1:
-                xavier_uniform_(p)
 
     def compute_l1_loss(self, w):
         return torch.abs(w).sum()
@@ -209,31 +136,26 @@ class TrajectoryModel(nn.Module):
     def compute_l2_loss(self, w):
         return torch.square(w).sum()
 
-    def forward(self, V, A, x=None, rn_edge_index=None, rn_edge_attr=None, step=None, ped_list=None, h_=None, KSTEPS=20):
+    def forward(self, V, A, x=None, rn_edge_index=None, rn_edge_attr=None, ped_list=None, h_=None):
 
         h = None
-        rn_pred = None
         traj_pred = None
         rn_out = [_ for _ in range(3)]
 
-        ### Mid Fusion
         if self.is_rn:
             ### Road Network
             if h_ is not None:
-                # rn_pred = self.model_rn(x, rn_edge_index, rn_edge_attr, h=h_.clone())
                 rn_pred, rn_out[0], rn_out[1], rn_out[2] = self.model_rn(x, rn_edge_index, rn_edge_attr, h=h_.clone())
             else:
-                # rn_pred = self.model_rn(x, rn_edge_index, rn_edge_attr)
                 rn_pred, rn_out[0], rn_out[1], rn_out[2] = self.model_rn(x, rn_edge_index, rn_edge_attr)
 
             ## Flatten the output from RoadNetwork
-            # out_rn = torch.cat((rn_pred[0], rn_pred[1], rn_pred[2]), axis=1)
             out_rn = torch.cat((rn_out[0], rn_out[1], rn_out[2]), axis=1)
 
-            # h = F.relu(self.conv_rn(out_rn.unsqueeze(0)))
             out_rn = self.rn_norm(self.linear_rn(out_rn))
             
             h = out_rn.clone()
+
 
         ### Local Pedestrian Trajectory Network
         if h is not None:
@@ -251,6 +173,4 @@ class TrajectoryModel(nn.Module):
             else:
                 traj_pred = self.model_loc(V, A.squeeze())
 
-
         return rn_out, traj_pred
-        # return rn_pred, traj_pred

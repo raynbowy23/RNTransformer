@@ -1,20 +1,13 @@
 from os import path as osp
 import torch
-from torch.utils.data import DataLoader
-import pickle
 import argparse
-import glob
-import torch.distributions.multivariate_normal as torchdist
 from utils.static_graph_temporal_signal import temporal_signal_split
 from tqdm import tqdm
 import argparse
 
-import matplotlib.pyplot as plt
-import seaborn as sns
-
 from utils.metrics import * 
 from models.RNGCN import RNTransformer
-from data_loader import RoadNetwork, RoadNetworkPeds, TrajectoryDataset
+from data_loader import RoadNetwork, TrajectoryDataset
 
 
 parser = argparse.ArgumentParser(description="Parameter Settings for Training")
@@ -32,8 +25,8 @@ parser.add_argument('--pretrained_dir', default="./pretrained",
 # Test options
 parser.add_argument('--seed', default=42,
                 help="seed number", type=int)
-parser.add_argument('--epochs', default="30",
-                help="Epochs for train, validation, and test suite", type=int)
+parser.add_argument('--pretrained_epoch', default="0",
+                help="Pretrained epoch for test", type=int)
 parser.add_argument('--pretrained_file', default="val_29.pt", type=str,
                 help="Path to pretrained file which wants to be validated")
 parser.add_argument('--is_preprocessed', action="store_true",
@@ -75,6 +68,7 @@ parser.add_argument('--skip', default=12, type=int,
                 help="Frame adjustable parameter. 12 is 2.5 FPS for SDD.")
 parser.add_argument('--is_normalize', action="store_true", default=False,
                 help="")
+parser.add_argument('--uid', type=int, help='Unique ID for the experiment', default=0)
 
 opt = parser.parse_args()
 
@@ -97,16 +91,11 @@ def load_data(opt):
                                    opt.grid, opt.agg_frame, num_timesteps_in=opt.rn_num_timesteps_in, 
                                    num_timesteps_out=opt.rn_num_timesteps_out, is_preprocessed=opt.is_rn_preprocessed)
         dataset = road_network.get_dataset() 
-        train_rn_dataset, test_rn_dataset = temporal_signal_split(dataset, train_ratio=opt.tr)
+        _, test_rn_dataset = temporal_signal_split(dataset, train_ratio=opt.tr)
     else:
         print("Load Road Network")
-        # out_list = [8, 16, 24, 36]
-        # out_list = [8, 16, 24]
-        out_list = [12]
-        # out_list = [4, 8, 16]
+        out_list = [1, 4, 8]
         road_network = [object for _ in range(len(out_list))]
-        dataset = [Dataset for _ in range(len(out_list))]
-        # train_rn_dataset, test_rn_dataset = [Dataset for _ in range(len(out_list))], [Dataset for _ in range(len(out_list))]
         test_rn_loader_list = []
         for i in range(len(out_list)):            
 
@@ -125,11 +114,6 @@ def load_data(opt):
                     train_mode='test',
                     is_rn=opt.is_rn,
                     is_normalize=opt.is_normalize)
-            # road_network[i] = RoadNetworkPeds(dataset_dir, opt.sdd_loc, opt.train_num, opt.test_num, 
-            #                             opt.rn_num, opt.grid, opt.agg_frame, num_timesteps_in=opt.rn_num_timesteps_in, 
-            #                             num_timesteps_out=out_list[i], skip=opt.skip, is_preprocessed=opt.is_rn_preprocessed)
-            # dataset[i] = road_network[i].get_dataset() 
-            # train_rn_dataset[i], test_rn_dataset[i] = temporal_signal_split(dataset[i], train_ratio=opt.tr)
             test_rn_dataset = test_dataset.get(opt.rn_num_timesteps_in, out_list[i])
             test_rn_loader_list.append(test_rn_dataset)
 
@@ -139,34 +123,53 @@ def load_data(opt):
 # Test phase
 @torch.no_grad()
 def test_rn(test_rn_dataset):
-    mse8, mse16, mse24 = [], [], []
-    mse = []
+    out = [_ for _ in range(len(out_list))]
+    _loss = [[] for _ in range(len(out_list))]
 
     model_rn.eval()
 
-    for i, batch in tqdm(enumerate(test_rn_dataset[0])):
-    # for i, batch in tqdm(enumerate(zip(test_rn_dataset[0], test_rn_dataset[1], test_rn_dataset[2]))):
-        # rn8, rn16, rn24 = batch[0].to(device), batch[1].to(device), batch[2].to(device)
+    if len(test_rn_dataset) == 1:
+        pbar = tqdm(enumerate(test_rn_dataset[0]))
+    elif len(test_rn_dataset) == 2:
+        pbar = tqdm(enumerate(zip(test_rn_dataset[0], test_rn_dataset[1])))
+    else:
+        pbar = tqdm(enumerate(zip(test_rn_dataset[0], test_rn_dataset[1], test_rn_dataset[2])))
 
-        # x = [batch[i].x for i in range(len(batch))]
-        # edge_index = [batch[i].edge_index for i in range(len(batch))]
-        # edge_attr = [batch[i].edge_attr for i in range(len(batch))]
-        x = [batch.x.to(device)]
-        y = [batch.y.to(device)]
-        edge_index = [batch.edge_index.to(device)]
-        edge_attr = [batch.edge_attr.to(device)]
+    for i, batch in pbar:
 
-        out = model_rn(x, edge_index, edge_attr)
-        mse.append(((out - y[0])**2).cpu())
+        if len(test_rn_dataset) == 1:
+            x = [batch.x.to(device)]
+            y = [batch.y.to(device)]
+            edge_index = [batch.edge_index.to(device)]
+            edge_attr = [batch.edge_attr.to(device)]
+        else:
+            x = [batch[i].x.to(device) for i in range(len(batch))]
+            y = [batch[i].y.to(device) for i in range(len(batch))]
+            edge_index = [batch[i].edge_index.to(device) for i in range(len(batch))]
+            edge_attr = [batch[i].edge_attr.to(device) for i in range(len(batch))]
 
-        # out8, out16, out24 = model_rn(x, edge_index, edge_attr)
-        # mse8.append(((out8 - rn8.y)**2).cpu()) # + ((out16 - rn16.y)**2).cpu() # + ((out24 - rn24.y)**2).cpu() + ((out32 - rn32.y)**2).cpu())
-        # mse16.append(((out16 - rn16.y)**2).cpu()) 
-        # mse24.append(((out24 - rn24.y)**2).cpu()) 
-    # return float(torch.cat(mse8, dim=0).mean().sqrt()), float(torch.cat(mse8, dim=0).mean()), \
-    #     float(torch.cat(mse16, dim=0).mean().sqrt()), float(torch.cat(mse16, dim=0).mean()), \
-    #     float(torch.cat(mse24, dim=0).mean().sqrt()), float(torch.cat(mse24, dim=0).mean())
-    return float(torch.cat(mse, dim=0).mean().sqrt()), float(torch.cat(mse, dim=0).mean())
+        if len(out_list) == 1:
+            _, out[0] = model_rn(x, edge_index, edge_attr)
+            _loss.append(((out[0] - y[0])**2).cpu())
+        elif len(out_list) == 2:
+            _, out[0], out[1] = model_rn(x, edge_index, edge_attr)
+            _loss[0].append(((out[0] - y[0])**2).cpu())
+            _loss[1].append(((out[1] - y[1])**2).cpu()) 
+        elif len(out_list) == 3:
+            _, out[0], out[1], out[2] = model_rn(x, edge_index, edge_attr)
+            _loss[0].append(((out[0] - y[0])**2).cpu())
+            _loss[1].append(((out[1] - y[1])**2).cpu()) 
+            _loss[2].append(((out[2] - y[2])**2).cpu()) 
+
+    if len(out_list) == 1:
+        return float(torch.cat(_loss[0], dim=0).mean().sqrt()), float(torch.cat(_loss[0], dim=0).mean())
+    elif len(out_list) == 2:
+        return float(torch.cat(_loss[0], dim=0).mean().sqrt()), float(torch.cat(_loss[0], dim=0).mean()), \
+            float(torch.cat(_loss[1], dim=0).mean().sqrt()), float(torch.cat(_loss[1], dim=0).mean())
+    elif len(out_list) == 3:
+        return float(torch.cat(_loss[0], dim=0).mean().sqrt()), float(torch.cat(_loss[0], dim=0).mean()), \
+            float(torch.cat(_loss[1], dim=0).mean().sqrt()), float(torch.cat(_loss[1], dim=0).mean()), \
+            float(torch.cat(_loss[2], dim=0).mean().sqrt()), float(torch.cat(_loss[2], dim=0).mean())
 
 
 def main():
@@ -178,29 +181,32 @@ def main():
 
     print("===== Initializing model for road network =====")
 
-    # if opt.dataset == "sdd":
-    #     num_node_features = 7
-    # else:
     num_node_features = 7
 
     num_nodes = len(next(iter(test_rn_dataset[0])).x)
     print(out_list)
 
-    # model_path = osp.join(opt.pretrained_dir, 'road_network', 'model_grid{}_outlist{}_{}_{}_epoch{}.pt'.format(opt.grid, out_list[0], out_list[1], out_list[2], opt.epochs))
-    model_path = osp.join(opt.pretrained_dir, 'road_network', 'model_grid{}_outlist{}_epoch{}.pt'.format(opt.grid, out_list[0], opt.epochs))
-    # model_path = osp.join(opt.pretrained_dir, 'social_stgcnn', opt.dataset, 'model_grid{}_epoch{}.pt'.format(opt.grid, opt.epochs))
+    if len(out_list) == 1:
+        model_path = osp.join(opt.pretrained_dir, 'road_network', opt.dataset, '{}_model_grid{}_outlist{}_epoch{}.pt'.format(opt.uid, opt.grid, out_list[0], opt.pretrained_epoch))
+    elif len(out_list) == 2:
+        model_path = osp.join(opt.pretrained_dir, 'road_network', opt.dataset, '{}_model_grid{}_outlist{}_{}_epoch{}.pt'.format(opt.uid, opt.grid, out_list[0], out_list[1], opt.pretrained_epoch))
+    elif len(out_list) == 3:
+        model_path = osp.join(opt.pretrained_dir, 'road_network', opt.dataset, '{}_model_grid{}_outlist{}_{}_{}_epoch{}.pt'.format(opt.uid, opt.grid, out_list[0], out_list[1], out_list[2], opt.pretrained_epoch))
 
     global model_rn
     model_rn = RNTransformer(node_features=num_node_features, num_nodes=num_nodes, periods=opt.rn_num_timesteps_in, output_dim_list=out_list, device=device).to(device)
     model_rn.load_state_dict(torch.load(model_path))
 
-    # rmse, mse, rmse16, mse16, rmse24, mse24 = test_rn(test_rn_dataset)
+    _loss = [0 for _ in range(len(out_list))]
 
-    # print(f'Accuracy. RMSE: {rmse}, MSE: {mse}, RMSE 16: {rmse16}, MSE 16: {mse16}, RMSE 24: {rmse24}, MSE 24: {mse24}')
+    if len(out_list) == 1:
+        _loss[0], _ = test_rn(test_rn_dataset)
+    elif len(out_list) == 2:
+        _loss[0], _, _loss[1], _ = test_rn(test_rn_dataset)
+    elif len(out_list) == 3:
+        _loss[0], _, _loss[1], _, _loss[2], _ = test_rn(test_rn_dataset)
 
-    rmse, mse = test_rn(test_rn_dataset)
-
-    print(f'Accuracy. RMSE: {rmse}, MSE: {mse}')
+    print("Road Network - Accuracy. Test Loss 1: {:.4f}, Test Loss 2: {:4f}, Test Loss 3: {:4f}".format(_loss[0], _loss[1], _loss[2]))
 
 
 if __name__ == '__main__':

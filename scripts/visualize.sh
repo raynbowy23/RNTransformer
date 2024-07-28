@@ -1,1 +1,0 @@
-python track_visualization.py --dataset ind --show_trajectory True --show_future_trajectory True

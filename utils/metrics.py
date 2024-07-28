@@ -44,6 +44,7 @@ def ade(predAll, targetAll, count_):
         T = pred.shape[1]
         sum_ = [0 for _ in range(4)]
         # sum_ = 0
+        a, b, c = 0, 0, 0
         for i in range(N):
             cnt = 0
             for t in range(T):
@@ -54,34 +55,34 @@ def ade(predAll, targetAll, count_):
                     sum_[2] += math.sqrt((pred[i,t,0] - target[i,t,0])**2 + (pred[i,t,1] - target[i,t,1])**2)
                 else:
                     sum_[3] += math.sqrt((pred[i,t,0] - target[i,t,0])**2 + (pred[i,t,1] - target[i,t,1])**2)
-                
+        
         sum_all += sum_[0] / (N * T)
         sum_all1 += sum_[1] / (N * T)
         sum_all2 += sum_[2] / (N * T)
         sum_all3 += sum_[3] / (N * T)
+
+    # assert(sum_all/T, (sum_all1/T+sum_all2/T+sum_all3/T))
         
     # return sum_all / All
-    return sum_all / All, sum_[1] / 12, sum_[2] / 12, sum_[3] / 12
-'''
+    return sum_all / All, sum_all1 / All, sum_all2 / All, sum_all3 / All
 
 
-def ade(predAll,targetAll,count_):
-    All = len(predAll)
-    sum_all = 0 
-    for s in range(All):
-        pred = np.swapaxes(predAll[s][:,:count_[s],:],0,1)
-        target = np.swapaxes(targetAll[s][:,:count_[s],:],0,1)
+# def ade(predAll,targetAll,count_):
+#     All = len(predAll)
+#     sum_all = 0 
+#     for s in range(All):
+#         pred = np.swapaxes(predAll[s][:,:count_[s],:],0,1)
+#         target = np.swapaxes(targetAll[s][:,:count_[s],:],0,1)
         
-        N = pred.shape[0]
-        T = pred.shape[1]
-        sum_ = 0 
-        for i in range(N):
-            for t in range(T):
-                sum_+=math.sqrt((pred[i,t,0] - target[i,t,0])**2+(pred[i,t,1] - target[i,t,1])**2)
-        sum_all += sum_/(N*T)
+#         N = pred.shape[0]
+#         T = pred.shape[1]
+#         sum_ = 0 
+#         for i in range(N):
+#             for t in range(T):
+#                 sum_+=math.sqrt((pred[i,t,0] - target[i,t,0])**2+(pred[i,t,1] - target[i,t,1])**2)
+#         sum_all += sum_/(N*T)
         
-    return sum_all/All
-'''
+#     return sum_all/All
 
 
 # Final Displacement Error
@@ -107,10 +108,6 @@ def min_max_normalize(data):
     eps = 1e-10
     
     normalized_data = (data - min_values) / (max_values - min_values + eps)
-    # if torch.equal(min_values, torch.tensor([0., 0.])) or torch.equal(max_values, torch.tensor([0., 0.])):
-    #     normalized_data = (data - min_values) / (max_values - min_values + eps)
-    # else:
-    #     normalized_data = (data - min_values) / (max_values - min_values)
     return normalized_data, min_values, max_values
 
 def min_max_unnormalize(normalized_data, min_values, max_values):
@@ -145,6 +142,7 @@ def closer_to_zero(current, new_v):
     else: 
         return False
 
+# TODO
 def kl_loss(V_pred, V_trgt):
     # mux, muy, sx, sy, corr
     assert len(V_pred.shape) == len(V_trgt.shape)

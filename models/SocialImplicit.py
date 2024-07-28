@@ -33,12 +33,13 @@ class SocialCellLocal(nn.Module):
                                padding=1,
                                padding_mode='zeros')
 
-        # self.rn_w = nn.Parameter(torch.zeros(1), requires_grad=True)
+        # RNTransformer integration
+        self.rn_w = nn.Parameter(torch.zeros(1), requires_grad=True)
 
-        # ## Road Network
-        # temp_out = int(12 * (12 / temporal_output))
-        # self.conv_rn = torch.nn.Conv1d(num_nodes, temp_out, kernel_size=1)
-        # self.bn = torch.nn.BatchNorm1d(temp_out)
+        ## Road Network
+        temp_out = int(12 * (12 / temporal_output))
+        self.conv_rn = torch.nn.Conv1d(num_nodes, temp_out, kernel_size=1)
+        self.bn = torch.nn.BatchNorm1d(temp_out)
         self.temporal_output = temporal_output
 
     def forward(self, v, h=None):
@@ -118,13 +119,6 @@ class SocialCellGlobal(nn.Module):
                                    temporal_input=temporal_input,
                                    temporal_output=temporal_output,
                                    num_nodes=num_nodes)
-
-        # self.rn_w = nn.Parameter(torch.randn(1), requires_grad=True)
-
-        # ## Road Network
-        # temp_out = int(12 * (12 / temporal_output))
-        # self.conv_rn = torch.nn.Conv1d(num_nodes, 8, kernel_size=1)
-        # self.bn = torch.nn.BatchNorm1d(8)
 
     def forward(self, v, noise, weight_select=1, h=None):
         #Combine Vectorized Noise

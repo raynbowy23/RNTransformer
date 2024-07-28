@@ -6,7 +6,6 @@ import datetime
 import pytz
 import torch
 from torch import nn
-from torch.utils.data import DataLoader, Subset
 from utils.static_graph_temporal_signal import temporal_signal_split
 from tqdm import tqdm
 import logging
@@ -18,7 +17,7 @@ from torch.utils.tensorboard import SummaryWriter
 
 from utils.metrics import *
 from models.RNGCN import RNTransformer
-from data_loader import inDDatasetGraph, RoadNetwork, RoadNetworkPeds, TrajectoryDataset
+from data_loader import RoadNetwork, TrajectoryDataset
 
 # Writer will output to ./runs/ directory by default
 writer = SummaryWriter()
@@ -125,12 +124,8 @@ def load_data(opt):
         train_rn_dataset, test_rn_dataset = temporal_signal_split(dataset, train_ratio=opt.tr)
     else:
         print("Load Road Network")
-        # out_list = [8, 16, 24, 36]
-        # out_list = [8, 16, 24]
         out_list = [1, 4, 8]
-        # out_list = [12]
         road_network = [object for _ in range(len(out_list))]
-        # train_rn_dataset, test_rn_dataset = [Dataset for _ in range(len(out_list))], [Dataset for _ in range(len(out_list))]
         train_rn_loader_list, test_rn_loader_list = [], []
         for i in range(len(out_list)):
             train_dataset = TrajectoryDataset(
@@ -146,7 +141,7 @@ def load_data(opt):
                     is_preprocessed=opt.is_rn_preprocessed,
                     dataset_iter=i,
                     dataset=opt.dataset,
-                    train_mode='train',
+                    train_mode='rn_train',
                     is_rn=opt.is_rn,
                     is_normalize=opt.is_normalize)
 
@@ -166,18 +161,11 @@ def load_data(opt):
                     train_mode='val',
                     is_rn=opt.is_rn,
                     is_normalize=opt.is_normalize)
-            # road_network[i] = RoadNetworkPeds(
-            #         dataset_dir, opt.sdd_loc, opt.train_num, opt.test_num, 
-            #                             opt.rn_num, opt.grid, opt.agg_frame, num_timesteps_in=opt.rn_num_timesteps_in, 
-            #                             num_timesteps_out=out_list[i], skip=opt.skip, is_preprocessed=opt.is_rn_preprocessed)
-            # dataset[i] = road_network[i].get_dataset() 
-            # train_rn_dataset[i], test_rn_dataset[i] = temporal_signal_split(dataset[i], train_ratio=opt.tr)
             train_rn_dataset = train_dataset.get(opt.rn_num_timesteps_in, out_list[i])
             test_rn_dataset = test_dataset.get(opt.rn_num_timesteps_in, out_list[i])
             train_rn_loader_list.append(train_rn_dataset)
             test_rn_loader_list.append(test_rn_dataset)
 
-            # print(next(iter(train_rn_dataset[i])))
     return train_rn_loader_list, test_rn_loader_list
 
 
@@ -196,6 +184,8 @@ def train_rn(train_rn_dataset):
 
     if len(train_rn_dataset) == 1:
         pbar = tqdm(enumerate(train_rn_dataset[0]))
+    elif len(train_rn_dataset) == 2:
+        pbar = tqdm(enumerate(zip(train_rn_dataset[0], train_rn_dataset[1])))
     else:
         pbar = tqdm(enumerate(zip(train_rn_dataset[0], train_rn_dataset[1], train_rn_dataset[2])))
         
@@ -214,14 +204,17 @@ def train_rn(train_rn_dataset):
             edge_index = [batch[i].edge_index.to(device) for i in range(len(batch))]
             edge_attr = [batch[i].edge_attr.to(device) for i in range(len(batch))]
 
-        _, rn_out_list[0], rn_out_list[1], rn_out_list[2] = model_rn(x, edge_index, edge_attr)
+        if len(out_list) == 1:
+            _, rn_out_list[0] = model_rn(x, edge_index, edge_attr)
+        elif len(out_list) == 2:
+            _, rn_out_list[0], rn_out_list[1] = model_rn(x, edge_index, edge_attr)
+        elif len(out_list) == 3:
+            _, rn_out_list[0], rn_out_list[1], rn_out_list[2] = model_rn(x, edge_index, edge_attr)
 
-        if len(rn_out_list) > 4:
-            # loss += torch.mean((rn_out_list[0] - y[0])**2).cpu()
+        if len(out_list) == 1:
             loss += huber_loss(rn_out_list[0], y[0]).cpu()
         else:
-            for i in range(len(rn_out_list)):
-                # loss += torch.mean((rn_out_list[i] - y[i])**2).cpu()
+            for i in range(len(out_list)):
                 loss += huber_loss(rn_out_list[i], y[i]).cpu()
 
         step += 1
@@ -238,15 +231,15 @@ def train_rn(train_rn_dataset):
 # Test phase
 @torch.no_grad()
 def test_rn(test_rn_dataset):
-    mse8, mse16, mse24 = [], [], []
-    mse_list = []
-    rn_out_list = [_ for _ in range(3)]
+    out = [_ for _ in range(len(out_list))]
+    _loss = [[] for _ in range(len(out_list))]
 
     model_rn.eval()
 
-    # for i, batch in tqdm(enumerate(test_rn_dataset[0])):
     if len(test_rn_dataset) == 1:
         pbar = tqdm(enumerate(test_rn_dataset[0]))
+    elif len(test_rn_dataset) == 2:
+        pbar = tqdm(enumerate(zip(test_rn_dataset[0], test_rn_dataset[1])))
     else:
         pbar = tqdm(enumerate(zip(test_rn_dataset[0], test_rn_dataset[1], test_rn_dataset[2])))
         
@@ -263,20 +256,29 @@ def test_rn(test_rn_dataset):
             edge_index = [batch[i].edge_index.to(device) for i in range(len(batch))]
             edge_attr = [batch[i].edge_attr.to(device) for i in range(len(batch))]
         
-        _, out8, out16, out24 = model_rn(x, edge_index, edge_attr)
-        # rn_out_list = model_rn(x, edge_index, edge_attr)
+        if len(out_list) == 1:
+            _, out[0] = model_rn(x, edge_index, edge_attr)
+            _loss.append(((out[0] - y[0])**2).cpu())
+        elif len(out_list) == 2:
+            _, out[0], out[1] = model_rn(x, edge_index, edge_attr)
+            _loss[0].append(((out[0] - y[0])**2).cpu())
+            _loss[1].append(((out[1] - y[1])**2).cpu()) 
+        elif len(out_list) == 3:
+            _, out[0], out[1], out[2] = model_rn(x, edge_index, edge_attr)
+            _loss[0].append(((out[0] - y[0])**2).cpu())
+            _loss[1].append(((out[1] - y[1])**2).cpu()) 
+            _loss[2].append(((out[2] - y[2])**2).cpu()) 
 
-        # mse_list.append(((rn_out_list - y[0])**2).cpu())
-        # for i in range(len(rn_out_list)):
-        #     loss += torch.mean((rn_out_list[i] - y[i])**2).cpu()
 
-        mse8.append(((out8 - y[0])**2).cpu()) # + ((out16 - rn16.y)**2).cpu() # + ((out24 - rn24.y)**2).cpu() + ((out32 - rn32.y)**2).cpu())
-        mse16.append(((out16 - y[1])**2).cpu()) 
-        mse24.append(((out24 - y[2])**2).cpu()) 
-    # return float(torch.cat(mse_list, dim=0).mean().sqrt()), float(torch.cat(mse_list, dim=0).mean())
-    return float(torch.cat(mse8, dim=0).mean().sqrt()), float(torch.cat(mse8, dim=0).mean()), \
-        float(torch.cat(mse16, dim=0).mean().sqrt()), float(torch.cat(mse16, dim=0).mean()), \
-        float(torch.cat(mse24, dim=0).mean().sqrt()), float(torch.cat(mse24, dim=0).mean())
+    if len(out_list) == 1:
+        return float(torch.cat(_loss[0], dim=0).mean().sqrt()), float(torch.cat(_loss[0], dim=0).mean())
+    elif len(out_list) == 2:
+        return float(torch.cat(_loss[0], dim=0).mean().sqrt()), float(torch.cat(_loss[0], dim=0).mean()), \
+            float(torch.cat(_loss[1], dim=0).mean().sqrt()), float(torch.cat(_loss[1], dim=0).mean())
+    elif len(out_list) == 3:
+        return float(torch.cat(_loss[0], dim=0).mean().sqrt()), float(torch.cat(_loss[0], dim=0).mean()), \
+            float(torch.cat(_loss[1], dim=0).mean().sqrt()), float(torch.cat(_loss[1], dim=0).mean()), \
+            float(torch.cat(_loss[2], dim=0).mean().sqrt()), float(torch.cat(_loss[2], dim=0).mean())
 
 
 def main():
@@ -292,8 +294,6 @@ def main():
 
     print("===== Initializing model for road network =====")
 
-    num_node_features = 7
-
     num_nodes = len(next(iter(train_rn_dataset[0])).x)
     print(out_list)
 
@@ -301,8 +301,6 @@ def main():
     model_rn = RNTransformer(node_features=7, num_nodes=num_nodes, periods=opt.rn_num_timesteps_in, output_dim_list=out_list, device=device).to(device)
 
     # Training settings for road network
-    # optimizer_rn = optim.RMSprop(model_rn.parameters(), lr=1e-2, weight_decay=5e-5)
-    # optimizer_rn = optim.RMSprop(model_rn.parameters(), lr=1e-3, weight_decay=1e-4)
     optimizer_rn = torch.optim.SGD(model_rn.parameters(), lr=1e-2, weight_decay=1e-3)
 
     if opt.use_lrschd:
@@ -314,25 +312,32 @@ def main():
         total_param += np.prod(model_rn.state_dict()[param_tensor].size())
     print('Net\'s total params:', total_param)
 
+    _loss = [0 for _ in range(len(out_list))]
+
     for epoch in tqdm(range(opt.epochs + 1)):
 
         train_loss = train_rn(train_rn_dataset)
 
-        rmse, mse, rmse16, mse16, rmse24, mse24 = test_rn(test_rn_dataset)
-        # rmse, mse = test_rn(test_rn_dataset)
+        if len(out_list) == 1:
+            _loss[0], _ = test_rn(test_rn_dataset)
+        elif len(out_list) == 2:
+            _loss[0], _, _loss[1], _ = test_rn(test_rn_dataset)
+        elif len(out_list) == 3:
+            _loss[0], _, _loss[1], _, _loss[2], _ = test_rn(test_rn_dataset)
 
-        print("Road Network - Epoch: {}, Train Loss: {:.4f}, Test RMSE 8: {:.4f}, Test RMSE 16: {:4f}, Test RMSE 24: {:4f}".format(epoch, train_loss, rmse, rmse16, rmse24))
-        # print("Road Network - Epoch: {}, Train Loss: {:.4f}, Test RMSE 8: {:.4f}".format(epoch, train_loss, rmse))
+        print("Road Network - Epoch: {}, Train Loss: {:.4f}, Test Loss 1: {:.4f}, Test Loss 2: {:4f}, Test Loss 3: {:4f}".format(epoch, train_loss, _loss[0], _loss[1], _loss[2]))
 
-        # logger.info("Road Network - Train Loss: {:.4f}, Test RMSE: {:.4f}".format(train_loss, rmse))
         loss_list.append(train_loss)
         writer.add_scalar('Long term: Loss/train', train_loss, epoch)
-        writer.add_scalar('Long term: Accuracy/test', rmse, epoch)
+        writer.add_scalar('Long term: Accuracy/test', _loss[0], epoch)
 
         if epoch % 10 == 0:
-            # torch.save(model_rn.state_dict(), osp.join(opt.pretrained_dir, 'road_network', 'model_grid{}_outlist{}_{}_{}_epoch{}.pt'.format(opt.grid, out_list[0], out_list[1], out_list[2], epoch)))
-            torch.save(model_rn.state_dict(), osp.join(opt.pretrained_dir, 'road_network', opt.dataset, '{}_model_grid{}_out_list{}_{}_{}_epoch{}.pt'.format(opt.uid, opt.grid, out_list[0], out_list[1], out_list[2], epoch)))
-            # torch.save(model_rn.state_dict(), osp.join(opt.pretrained_dir, 'road_network', 'model_grid{}_outlist{}_epoch{}.pt'.format(opt.grid, out_list[0], epoch)))
+            if len(out_list) == 1:
+                torch.save(model_rn.state_dict(), osp.join(opt.pretrained_dir, 'road_network', opt.dataset, '{}_model_grid{}_outlist{}_epoch{}.pt'.format(opt.uid, opt.grid, out_list[0], epoch)))
+            elif len(out_list) == 2:
+                torch.save(model_rn.state_dict(), osp.join(opt.pretrained_dir, 'road_network', opt.dataset, '{}_model_grid{}_outlist{}_{}_epoch{}.pt'.format(opt.uid, opt.grid, out_list[0], out_list[1], epoch)))
+            elif len(out_list) == 3:
+                torch.save(model_rn.state_dict(), osp.join(opt.pretrained_dir, 'road_network', opt.dataset, '{}_model_grid{}_outlist{}_{}_{}_epoch{}.pt'.format(opt.uid, opt.grid, out_list[0], out_list[1], out_list[2], epoch)))
 
         if opt.use_lrschd:
             scheduler.step()

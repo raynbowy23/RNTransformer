@@ -1,8 +1,14 @@
 /logs/
 /runs/
 /figures/
+/datasets/
 /datasets/sdd/
+/datasets/*/preprocessed/
 /checkpoints/
 /__pycache__/
 /models/__pycache__/
+/models/TrajNetPlusPlus.py
+/models/PedsTrajNet.py
+/utils/__pycache__/
 /pretrained/
+*.ipynb

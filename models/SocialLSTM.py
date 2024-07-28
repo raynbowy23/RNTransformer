@@ -136,15 +136,10 @@ class SocialModel(nn.Module):
         self.dropout = nn.Dropout(0.5)
 
 
-        # Concatenate the RN info
+        # Concatenate the RN feature
         if is_rn:
-            # self.rn_linear = nn.Linear(12, 128)
-
             self.rn_linear1 = nn.Linear(9*self.seq_length, 64)
             self.rn_linear2 = nn.Linear(4*64, 128)
-        # self.social_w = nn.Parameter(torch.zeros(1), requires_grad=True)
-        # self.rn_w = nn.Parameter(torch.zeros(1), requires_grad=True)
-        # self.bn = nn.BatchNorm1d(64)
 
     def getSocialTensor(self, grid, hidden_states):
         '''
@@ -178,16 +173,6 @@ class SocialModel(nn.Module):
         unique_ids = pd.unique(np.concatenate(pedlist).ravel().tolist()).astype(int)
         # create a lookup table which maps ped ids -> array indices
         lookup_table = dict(zip(unique_ids, range(0, len(unique_ids))))
-
-        # seq_data = np.zeros(shape=(self.seq_length, len(lookup_table), 2))
-
-        # # create new structure of array
-        # for ind, frame in enumerate(x_seq):
-        #     print(lookup_table)
-        #     corr_index = [lookup_table[x] for x in frame[:, 0]]
-        #     seq_data[ind, corr_index,:] = frame[:,1:3]
-
-        # return_arr = Variable(torch.from_numpy(np.array(seq_data)).float())
 
         return lookup_table
             
@@ -272,14 +257,8 @@ class SocialModel(nn.Module):
             # Concat input
             concat_embedded = torch.cat((input_embedded, tensor_embedded), 1)
 
-            # Concatenate the RN info
-            # out_rn = F.conv1d(h.unsqueeze(0), torch.randn(input_embedded.size(0), 36, 1).cuda(), stride=1, padding=0, dilation=1, groups=1)
+            # Concatenate the RN feature
             if h != None:
-                # weight = nn.Parameter(torch.randn(input_embedded.size(0), 36), requires_grad=True).to(input_embedded.device)
-                # out_rn = F.relu(F.linear(h.permute(1, 0), weight)).permute(1, 0)
-                # concat_embedded = self.social_w * concat_embedded + self.rn_w * out_rn.squeeze()
-                # out_rn = F.relu(self.rn_linear1(out_rn)) # (1, 36, 128) -> (1, ped_num, 128)
-                # concat_embedded = F.relu(self.mix_linear(torch.cat((concat_embedded, out_rn.squeeze()), 1)))
                 concat_embedded = torch.cat((concat_embedded, out_rn.squeeze()), 1)
 
             # One-step of the LSTM
