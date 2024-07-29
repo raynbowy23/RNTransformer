@@ -1,3 +1,4 @@
+vis.ipynb
 /logs/
 /runs/
 /figures/
@@ -11,4 +12,3 @@
 /models/PedsTrajNet.py
 /utils/__pycache__/
 /pretrained/
-*.ipynb
