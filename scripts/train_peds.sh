@@ -8,16 +8,16 @@
 
 # Train S-STGCNN on eth
 
-# echo "train hotel" & python3 run.py --num_timesteps_in 8 --num_timesteps_out 12 --epochs 150 --dataset hotel --bs 128 --lr_sh_rate 150 --optimizer SGD --use_lrschd --model_name social_implicit \
-#     --skip 1 --agg_frame 1 --grid 6 --uid 5 --is_rn --is_preprocessed
+echo "train hotel" & python3 run.py --num_timesteps_in 8 --num_timesteps_out 12 --epochs 150 --dataset hotel --bs 128 --lr_sh_rate 150 --optimizer SGD --use_lrschd --model_name social_implicit \
+    --skip 1 --agg_frame 1 --grid 6 --uid 5 --is_rn --is_preprocessed
 
-# echo "train univ" & python3 run.py --num_timesteps_in 8 --num_timesteps_out 12 --epochs 150 --dataset univ --bs 128 --lr_sh_rate 150 --optimizer SGD --use_lrschd --model_name social_implicit \
-#     --skip 1 --agg_frame 1 --grid 6 --uid 5 --is_rn --is_preprocessed
+echo "train univ" & python3 run.py --num_timesteps_in 8 --num_timesteps_out 12 --epochs 150 --dataset univ --bs 128 --lr_sh_rate 150 --optimizer SGD --use_lrschd --model_name social_implicit \
+    --skip 1 --agg_frame 1 --grid 6 --uid 5 --is_rn --is_preprocessed
 
-# echo "train zara1" & python3 run.py --num_timesteps_in 8 --num_timesteps_out 12 --epochs 150 --dataset zara1 --bs 128 --lr_sh_rate 150 --optimizer SGD --use_lrschd --model_name social_implicit \
-#     --skip 1 --agg_frame 1 --grid 6 --uid 5 --is_rn --is_preprocessed
+echo "train zara1" & python3 run.py --num_timesteps_in 8 --num_timesteps_out 12 --epochs 150 --dataset zara1 --bs 128 --lr_sh_rate 150 --optimizer SGD --use_lrschd --model_name social_implicit \
+    --skip 1 --agg_frame 1 --grid 6 --uid 5 --is_rn --is_preprocessed
 
 
 # Train S-STGCNN on sdd
-echo "train sdd" & python3 run.py --num_timesteps_in 8 --num_timesteps_out 12 --epochs 200 --dataset sdd --bs 128 --lr_sh_rate 250 --optimizer SGD --use_lrschd --model_name social_implicit \
-    --skip 1 --agg_frame 1 --grid 6 --uid 999 --is_preprocessed --is_rn
+# echo "train sdd" & python3 run.py --num_timesteps_in 8 --num_timesteps_out 12 --epochs 200 --dataset sdd --bs 128 --lr_sh_rate 250 --optimizer SGD --use_lrschd --model_name social_implicit \
+#     --skip 1 --agg_frame 1 --grid 6 --uid 201 --is_preprocessed --is_rn

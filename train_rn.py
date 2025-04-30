@@ -5,6 +5,7 @@ import argparse
 import datetime
 import pytz
 import torch
+from torch.profiler import ProfilerActivity
 from torch import nn
 from utils.static_graph_temporal_signal import temporal_signal_split
 from tqdm import tqdm
@@ -17,7 +18,8 @@ from torch.utils.tensorboard import SummaryWriter
 
 from utils.metrics import *
 from models.RNGCN import RNTransformer
-from data_loader import RoadNetwork, TrajectoryDataset
+# from data_loader import RoadNetwork, TrajectoryDataset
+from data_loader import TrajectoryDataset
 
 # Writer will output to ./runs/ directory by default
 writer = SummaryWriter()
@@ -106,11 +108,6 @@ torch.cuda.manual_seed(opt.seed)
 torch.backends.cudnn.determinstic = True
 torch.backends.cudnn.benchmark = False
 
-def huber_loss(rn_pred, rn_gt):
-    h_loss = torch.nn.HuberLoss('mean', delta=0.1)
-    return h_loss(rn_pred, rn_gt)
-
-
 def load_data(opt):
     dataset_dir = osp.join(opt.dataset_dir, opt.dataset)
     global out_list
@@ -141,7 +138,7 @@ def load_data(opt):
                     is_preprocessed=opt.is_rn_preprocessed,
                     dataset_iter=i,
                     dataset=opt.dataset,
-                    train_mode='rn_train',
+                    train_mode='train',
                     is_rn=opt.is_rn,
                     is_normalize=opt.is_normalize)
 
@@ -169,163 +166,151 @@ def load_data(opt):
     return train_rn_loader_list, test_rn_loader_list
 
 
+train_rn_dataset, test_rn_dataset = load_data(opt)
+
+### Model saving directory
+print("===> Save model to %s" % opt.pretrained_dir)
+
+os.makedirs(opt.pretrained_dir, exist_ok=True)
+
+print("===== Initializing model for road network =====")
+
+num_nodes = len(next(iter(train_rn_dataset[0])).x)
+print(out_list)
+
+model_rn = RNTransformer(node_features=7, num_nodes=num_nodes, periods=opt.rn_num_timesteps_in, output_dim_list=out_list, device=device).to(device)
+
+# Training settings for road network
+# optimizer_rn = torch.optim.SGD(model_rn.parameters(), lr=1e-2, weight_decay=1e-3)
+optimizer_rn = torch.optim.Adam(model_rn.parameters(), lr=1e-3, weight_decay=1e-4)
+
+if opt.use_lrschd:
+    scheduler = torch.optim.lr_scheduler.StepLR(optimizer_rn, step_size=opt.lr_sh_rate, gamma=0.2)
+
+total_param = 0
+for param_tensor in model_rn.state_dict():
+    print(param_tensor, '\t', model_rn.state_dict()[param_tensor].size())
+    total_param += np.prod(model_rn.state_dict()[param_tensor].size())
+print('Net\'s total params:', total_param)
+
+def huber_loss(rn_pred, rn_gt):
+    h_loss = torch.nn.HuberLoss('mean', delta=0.1)
+    return h_loss(rn_pred, rn_gt)
+
 def train_rn(train_rn_dataset):
     """
     Train model for time horizon prediction with the road network
-    Currently using A3TGCN
     """
-    # Simple temporal Graph Neural Network
-    
-    loss = 0
-    rn_out_list = [_ for _ in range(3)]
-
     model_rn.train()
+    total_loss = 0
     step = 0
 
-    if len(train_rn_dataset) == 1:
-        pbar = tqdm(enumerate(train_rn_dataset[0]))
-    elif len(train_rn_dataset) == 2:
-        pbar = tqdm(enumerate(zip(train_rn_dataset[0], train_rn_dataset[1])))
-    else:
-        pbar = tqdm(enumerate(zip(train_rn_dataset[0], train_rn_dataset[1], train_rn_dataset[2])))
-        
-    for i, batch in pbar:
+    train_rn_dataset = [[b.to(device) for b in batch] for batch in zip(*train_rn_dataset)]
+
+    for batch in tqdm(train_rn_dataset):
+    # for i, batch in tqdm(enumerate(zip(*train_rn_dataset))):
+        x, y, edge_index, edge_attr = zip(*[(b.x, b.y, b.edge_index, b.edge_attr) for b in batch])
+        # x = [b.x.to(device) for b in batch]
+        # y = [b.y.to(device) for b in batch]
+
+        # edge_index = [b.edge_index.to(device) for b in batch]
+        # edge_attr = [b.edge_attr.to(device) for b in batch]
+
         optimizer_rn.zero_grad()
 
-        if len(train_rn_dataset) == 1:
-            x = [batch.x.to(device)]
-            y = [batch.y.to(device)]
-            edge_index = [batch.edge_index.to(device)]
-            edge_attr = [batch.edge_attr.to(device)]
-        else:
-            x = [batch[i].x.to(device) for i in range(len(batch))]
-            y = [batch[i].y.to(device) for i in range(len(batch))]
+        predictions = model_rn(x, edge_index, edge_attr)
 
-            edge_index = [batch[i].edge_index.to(device) for i in range(len(batch))]
-            edge_attr = [batch[i].edge_attr.to(device) for i in range(len(batch))]
+        # batch_loss = 0.0
+        # for i in range(len(predictions)):
+        #     batch_loss += huber_loss(predictions[i], y[i])
+        batch_loss = sum(huber_loss(p, y_) for p, y_ in zip(predictions, y))
 
-        if len(out_list) == 1:
-            _, rn_out_list[0] = model_rn(x, edge_index, edge_attr)
-        elif len(out_list) == 2:
-            _, rn_out_list[0], rn_out_list[1] = model_rn(x, edge_index, edge_attr)
-        elif len(out_list) == 3:
-            _, rn_out_list[0], rn_out_list[1], rn_out_list[2] = model_rn(x, edge_index, edge_attr)
+        batch_loss.backward()
+        optimizer_rn.step()
 
-        if len(out_list) == 1:
-            loss += huber_loss(rn_out_list[0], y[0]).cpu()
-        else:
-            for i in range(len(out_list)):
-                loss += huber_loss(rn_out_list[i], y[i]).cpu()
-
+        total_loss += batch_loss.item()
         step += 1
 
-    loss = loss / (step+1)
-    loss.backward()
-    optimizer_rn.step()
-
-    out_loss = loss.detach()
-
-    return out_loss
+    return total_loss / max(step, 1)
 
 
-# Test phase
 @torch.no_grad()
 def test_rn(test_rn_dataset):
-    out = [_ for _ in range(len(out_list))]
-    _loss = [[] for _ in range(len(out_list))]
+    n_horizon = len(test_rn_dataset)
+    horizon_losses = [[] for _ in range(n_horizon)]
 
     model_rn.eval()
 
-    if len(test_rn_dataset) == 1:
-        pbar = tqdm(enumerate(test_rn_dataset[0]))
-    elif len(test_rn_dataset) == 2:
-        pbar = tqdm(enumerate(zip(test_rn_dataset[0], test_rn_dataset[1])))
-    else:
-        pbar = tqdm(enumerate(zip(test_rn_dataset[0], test_rn_dataset[1], test_rn_dataset[2])))
-        
-    for i, batch in pbar:
+    test_rn_dataset = [[b.to(device) for b in batch] for batch in zip(*test_rn_dataset)]
+    horizon_losses = [[] for _ in range(n_horizon)]
 
-        if len(test_rn_dataset) == 1:
-            x = [batch.x.to(device)]
-            y = [batch.y.to(device)]
-            edge_index = [batch.edge_index.to(device)]
-            edge_attr = [batch.edge_attr.to(device)]
-        else:
-            x = [batch[i].x.to(device) for i in range(len(batch))]
-            y = [batch[i].y.to(device) for i in range(len(batch))]
-            edge_index = [batch[i].edge_index.to(device) for i in range(len(batch))]
-            edge_attr = [batch[i].edge_attr.to(device) for i in range(len(batch))]
-        
-        if len(out_list) == 1:
-            _, out[0] = model_rn(x, edge_index, edge_attr)
-            _loss.append(((out[0] - y[0])**2).cpu())
-        elif len(out_list) == 2:
-            _, out[0], out[1] = model_rn(x, edge_index, edge_attr)
-            _loss[0].append(((out[0] - y[0])**2).cpu())
-            _loss[1].append(((out[1] - y[1])**2).cpu()) 
-        elif len(out_list) == 3:
-            _, out[0], out[1], out[2] = model_rn(x, edge_index, edge_attr)
-            _loss[0].append(((out[0] - y[0])**2).cpu())
-            _loss[1].append(((out[1] - y[1])**2).cpu()) 
-            _loss[2].append(((out[2] - y[2])**2).cpu()) 
+    # for i, batches in tqdm(enumerate(zip(*test_rn_dataset))):
+    for batches in tqdm(test_rn_dataset):
 
+        x, y, edge_index, edge_attr = zip(*[(b.x, b.y, b.edge_index, b.edge_attr) for b in batches])
 
-    if len(out_list) == 1:
-        return float(torch.cat(_loss[0], dim=0).mean().sqrt()), float(torch.cat(_loss[0], dim=0).mean())
-    elif len(out_list) == 2:
-        return float(torch.cat(_loss[0], dim=0).mean().sqrt()), float(torch.cat(_loss[0], dim=0).mean()), \
-            float(torch.cat(_loss[1], dim=0).mean().sqrt()), float(torch.cat(_loss[1], dim=0).mean())
-    elif len(out_list) == 3:
-        return float(torch.cat(_loss[0], dim=0).mean().sqrt()), float(torch.cat(_loss[0], dim=0).mean()), \
-            float(torch.cat(_loss[1], dim=0).mean().sqrt()), float(torch.cat(_loss[1], dim=0).mean()), \
-            float(torch.cat(_loss[2], dim=0).mean().sqrt()), float(torch.cat(_loss[2], dim=0).mean())
+        # x_list = []
+        # y_list = []
+        # edge_index_list = []
+        # edge_attr_list = []
+        # for i in range(n_horizon):
+        #     batch = batches[i]
+        #     x_list.append(batch.x.to(device))
+        #     y_list.append(batch.y.to(device))
+        #     edge_index_list.append(batch.edge_index.to(device))
+        #     edge_attr_list.append(batch.edge_attr.to(device))
+
+        # predictions = model_rn(x_list, edge_index_list, edge_attr_list)
+        predictions = model_rn(x, edge_index, edge_attr)
+
+        # Compute MSE for each horizon
+        for i in range(n_horizon):
+            mse = ((predictions[i] - y[i]) ** 2).mean()
+            # horizon_losses[i].append(mse.cpu())
+            horizon_losses[i].append(mse)
+
+        # results = []
+        # for i in range(n_horizon):
+        #     # cat all MSE values for horizon i
+        #     all_mse = torch.stack(horizon_losses[i], dim=0)  # shape [num_batches]
+        #     mean_mse = float(all_mse.mean())                # average MSE across batches
+        #     rmse = mean_mse ** 0.5                          # sqrt of MSE
+        #     results.append((rmse, mean_mse))
+    results = [(torch.stack(h).mean().sqrt().item(), torch.stack(h).mean().item()) for h in horizon_losses]
+
+    return results
 
 
 def main():
-    h = None
     loss_list = []
 
-    train_rn_dataset, test_rn_dataset = load_data(opt)
-
-    ### Model saving directory
-    print("===> Save model to %s" % opt.pretrained_dir)
-
-    os.makedirs(opt.pretrained_dir, exist_ok=True)
-
-    print("===== Initializing model for road network =====")
-
-    num_nodes = len(next(iter(train_rn_dataset[0])).x)
-    print(out_list)
-
-    global model_rn, optimizer_rn
-    model_rn = RNTransformer(node_features=7, num_nodes=num_nodes, periods=opt.rn_num_timesteps_in, output_dim_list=out_list, device=device).to(device)
-
-    # Training settings for road network
-    optimizer_rn = torch.optim.SGD(model_rn.parameters(), lr=1e-2, weight_decay=1e-3)
-
-    if opt.use_lrschd:
-        scheduler = torch.optim.lr_scheduler.StepLR(optimizer_rn, step_size=opt.lr_sh_rate, gamma=0.2)
-
-    total_param = 0
-    for param_tensor in model_rn.state_dict():
-        print(param_tensor, '\t', model_rn.state_dict()[param_tensor].size())
-        total_param += np.prod(model_rn.state_dict()[param_tensor].size())
-    print('Net\'s total params:', total_param)
-
     _loss = [0 for _ in range(len(out_list))]
+
+    # with torch.profiler.profile(activities=[ProfilerActivity.CPU, ProfilerActivity.CUDA],
+    #                             record_shapes=True) as prof:
 
     for epoch in tqdm(range(opt.epochs + 1)):
 
         train_loss = train_rn(train_rn_dataset)
 
-        if len(out_list) == 1:
-            _loss[0], _ = test_rn(test_rn_dataset)
-        elif len(out_list) == 2:
-            _loss[0], _, _loss[1], _ = test_rn(test_rn_dataset)
-        elif len(out_list) == 3:
-            _loss[0], _, _loss[1], _, _loss[2], _ = test_rn(test_rn_dataset)
+        # if len(out_list) == 1:
+        #     _loss[0], _ = test_rn(test_rn_dataset)
+        # elif len(out_list) == 2:
+        #     _loss[0], _, _loss[1], _ = test_rn(test_rn_dataset)
+        # elif len(out_list) == 3:
+        #     _loss[0], _, _loss[1], _, _loss[2], _ = test_rn(test_rn_dataset)
 
-        print("Road Network - Epoch: {}, Train Loss: {:.4f}, Test Loss 1: {:.4f}, Test Loss 2: {:4f}, Test Loss 3: {:4f}".format(epoch, train_loss, _loss[0], _loss[1], _loss[2]))
+        # print("Road Network - Epoch: {}, Train Loss: {:.4f}, Test Loss 1: {:.4f}, Test Loss 2: {:4f}, Test Loss 3: {:4f}".format(epoch, train_loss, _loss[0], _loss[1], _loss[2]))
+
+        test_results = test_rn(test_rn_dataset)  
+
+        loss_strings = []
+        for i, (rmse, mse) in enumerate(test_results, 1):
+            loss_strings.append(f"[H{i} RMSE: {rmse:.4f}, MSE: {mse:.4f}]")
+
+        # Join them for printing:
+        print(f"Epoch {epoch}, Train Loss: {train_loss:.4f}, " + " ".join(loss_strings))
+
 
         loss_list.append(train_loss)
         writer.add_scalar('Long term: Loss/train', train_loss, epoch)
@@ -341,6 +326,7 @@ def main():
 
         if opt.use_lrschd:
             scheduler.step()
+    # print(prof.key_averages().table(sort_by="cpu_time_total"))
 
     writer.close()
 

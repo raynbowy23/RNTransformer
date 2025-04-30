@@ -12,3 +12,6 @@ vis.ipynb
 /models/PedsTrajNet.py
 /utils/__pycache__/
 /pretrained/
+/simulation/
+apply_ml.py
+/utils/__pycache__/

@@ -133,7 +133,6 @@ class inDDatasetGraph(Dataset):
             self.in_traj, self.pred_traj, self.in_traj_rel, self.pred_traj_rel, self.non_linear_ped, self.loss_mask, self.v_in, self.A_in, self.v_pred, self.A_pred, self.num_seq, self.seq_start_end = pickle.load(f)
         else:
             if is_train:
-                f = open(data_file_train, "wb")
                 data_file = self.data_file_tr
                 # self.data_ratio = 0.5
                 self.all_frames, self.all_tracks, self.all_static, self.all_meta = read_all_recordings_from_csv(self.data_dir, train_num=train_num, test_num=test_num, rn_num=rn_num, is_train=is_train, is_rn=False)

@@ -4,6 +4,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch_geometric.nn import GCNConv
+from torch_geometric.data import Data, Batch
 
 
 class TGCN(torch.nn.Module):
@@ -289,7 +290,7 @@ class MultiHeadAttention(nn.Module):
         self.to_qkv = nn.Linear(embed_dim, inner_dim*3, bias=False)
 
         self.dr = 0.
-        self.dropout = nn.Dropout(self.dr)
+        # self.dropout = nn.Dropout(self.dr)
 
         project_out = not (self.n_heads == 1 and self.single_head_dim == embed_dim)
 
@@ -309,18 +310,22 @@ class MultiHeadAttention(nn.Module):
         Returns:
             output vector from multihead attention
         """
+        bn, dim = x.shape[0], x.shape[1]
 
         x = self.norm(x)
-        qkv = self.to_qkv(x).chunk(3, dim=-1)
-        q, k, v = map(lambda t: rearrange(t, 'n (h d) -> h n d', h=self.n_heads), qkv)
+        qkv = self.to_qkv(x) # .chunk(3, dim=-1)
+        # q, k, v = map(lambda t: rearrange(t, 'n (h d) -> h n d', h=self.n_heads), qkv)
+        q, k, v = torch.split(qkv, dim, dim=1)
 
-        dots = torch.matmul(q, k.transpose(-1, -2)) * self.scale
+        # dots = torch.matmul(q, k.transpose(-1, -2)) * self.scale
 
-        attn = F.softmax(dots, dim=-1)
-        attn = self.dropout(attn)
+        # attn = F.softmax(dots, dim=-1)
+        # attn = self.dropout(attn)
 
-        out = torch.matmul(attn, v)
-        out = rearrange(out, 'h n d -> n (h d)')
+        # out = torch.matmul(attn, v)
+        # out = rearrange(out, 'h n d -> n (h d)')
+        attn_weights = torch.softmax(q @ k.transpose(0,1) / (dim**0.5), dim=-1)
+        out = attn_weights @ v  # shape [bsz, embed_dim]
         return self.out(out)
         
 
@@ -339,71 +344,111 @@ class RNTransformer(nn.Module):
         """
         super(RNTransformer, self).__init__()
 
-        hidden_dim = 256
         self.periods = periods
         self.num_nodes = num_nodes
         self.output_dim_list = output_dim_list
         self.n_horizon = len(output_dim_list)
-        self.flatten = [_ for _ in range(self.n_horizon)]
+        self.device = device
 
-        # assert isinstance(self.output_dim_list, list)
-        for i in range(0, self.n_horizon):
-            self.flatten[i] = nn.Linear(self.output_dim_list[i], 4).to(device) # Adjust features into same size
+        self.flatten = nn.ModuleList([
+            nn.Linear(max(self.output_dim_list), 4) for _ in range(self.n_horizon)
+        ])
         
-        self.rngcn = nn.ModuleList()
-        self.mlp_head = nn.ModuleList()
-        for i in range(self.n_horizon):
-            self.rngcn.append(
-                RoadNetworkGCN(
-                    node_features=node_features,
-                    num_nodes=self.num_nodes,
-                    periods=self.periods,
-                    output_dim=self.output_dim_list[i]
-                )
+        self.rngcn = RoadNetworkGCN(
+            node_features=node_features,
+            num_nodes=self.num_nodes,
+            periods=self.periods,
+            output_dim=max(self.output_dim_list)
+        )
+        self.mlp_head = nn.ModuleList([
+            nn.Sequential(
+                nn.Linear(4*self.n_horizon, out_dim),
             )
-            head_seq = nn.Sequential(
-                nn.Linear(4*self.n_horizon, self.output_dim_list[i]),
-                # nn.ReLU(),
-                # nn.BatchNorm1d(self.output_dim_list[i])
-            )
-            self.mlp_head.append(head_seq)
+            for out_dim in output_dim_list
+        ])
 
         self.depth = 1 # Temporaly
 
         ### Transformer
-        self.layers = nn.ModuleList([])
-        for _ in range(self.depth):
-            self.layers.append(nn.ModuleList([
-                MultiHeadAttention(embed_dim=4*self.n_horizon, n_heads=self.n_horizon).to(device),
-                FeedForward(embed_dim=4*self.n_horizon, hidden_dim=mlp_dim, dropout=dr).to(device)
-            ]))
+        self.layers = nn.ModuleList([
+            nn.ModuleList([
+                MultiHeadAttention(embed_dim=4*self.n_horizon, n_heads=self.n_horizon),
+                FeedForward(embed_dim=4*self.n_horizon, hidden_dim=mlp_dim, dropout=dr)
+            ])
+            for _ in range(self.depth)
+        ])
+
         self.to_latent = nn.Identity()
-
-        self.rngcn_out = [_ for _ in range(self.n_horizon)]
-
-
-    def forward(self, x, edge_index, edge_attr, h=None):
-        for i in range(self.n_horizon):
-            # Needs to be flatten
-            self.rngcn_out[i] = self.flatten[i](self.rngcn[i](x[i], edge_index[i], edge_attr[i], h=h))
-        rn_out = torch.cat(self.rngcn_out, axis=1)
+        self.to(device)
 
 
-        # TODO: Add Pos embedding and Dropout
+    # def forward(self, x, edge_index, edge_attr, h=None):
+        # # for i in range(self.n_horizon):
+        # #     # Needs to be flatten
+        # #     # self.rngcn_out[i] = self.flatten[i](self.rngcn[i](x[i], edge_index[i], edge_attr[i], h=h))
+        # #     # feat = self.rngcn(x[i], edge_index[i], edge_attr[i], h=h)
+        # #     self.rngcn_out[i] = self.flatten[i](feat)
 
-        ## Transformer
-        for attn, ff in self.layers:
-           rn_out = attn(rn_out) + rn_out 
-           rn_out = ff(rn_out) + rn_out
+        # rn_out = torch.cat(self.rngcn_out, dim=1)
 
-        # Make head to decoding to original header size
-        rn_out = self.to_latent(rn_out)
+        # # TODO: Add Pos embedding and Dropout
 
-        if self.n_horizon == 1:
-            return self.rngcn_out, self.mlp_head[0](rn_out)
-        elif self.n_horizon == 2:
-            return self.rngcn_out, self.mlp_head[0](rn_out), self.mlp_head[1](rn_out)
-        elif self.n_horizon == 3:
-            return self.rngcn_out, self.mlp_head[0](rn_out), self.mlp_head[1](rn_out), self.mlp_head[2](rn_out)
+        # ## Transformer
+        # for attn, ff in self.layers:
+        #    rn_out = attn(rn_out) + rn_out 
+        #    rn_out = ff(rn_out) + rn_out
+
+        # # Make head to decoding to original header size
+        # rn_out = self.to_latent(rn_out)
+
+        # final_preds = []
+        # for i in range(self.n_horizon):
+        #     head_i = self.mlp_head[i](rn_out)
+        #     final_preds.append(head_i)
+
+        # return final_preds
        
 
+    # def forward(self, x_list, edge_index_list, edge_attr_list, h=None):
+    #     data_list =  []
+    #     for i in range(self.n_horizon):
+    #         data = Data(x=x_list[i], edge_index=edge_index_list[i], edge_attr=edge_attr_list[i])
+    #         data_list.append(data)
+    #     batched = Batch.from_data_list(data_list).to(x_list[0].device)
+
+    #     feat = self.rngcn(batched.x, batched.edge_index, batched.edge_attr, h=h)
+
+    #     batch = batched.batch
+    #     self.rngcn_out = []
+    #     for i in range(self.n_horizon):
+    #         idx = (batch == i).nonzero(as_tuple=True)[0]
+    #         feat_i = feat[idx]
+    #         self.rngcn_out.append(self.flatten[i](feat_i))
+    #     rn_out = torch.cat(self.rngcn_out, dim=1)
+        
+    #      # Transformer + MLP head
+    #     rn_out = torch.cat(self.rngcn_out, dim=1)
+    #     for attn, ff in self.layers:
+    #         rn_out = attn(rn_out) + rn_out
+    #         rn_out = ff(rn_out) + rn_out
+
+    #     final_preds = []
+    #     for i in range(self.n_horizon):
+    #         head_i = self.mlp_head[i](rn_out)
+    #         final_preds.append(head_i)
+    #     return final_preds
+
+
+    def forward(self, x_list, edge_index_list, edge_attr_list, h=None):
+        self.rngcn_out = []
+        for i in range(self.n_horizon):
+            feat = self.rngcn(x_list[i], edge_index_list[i], edge_attr_list[i], h=h)
+            self.rngcn_out.append(self.flatten[i](feat))
+
+        rn_out = torch.cat(self.rngcn_out, dim=1)
+        for attn, ff in self.layers:
+            rn_out = attn(rn_out) + rn_out
+            rn_out = ff(rn_out) + rn_out
+
+        rn_out = self.to_latent(rn_out)
+        return [head(rn_out) for head in self.mlp_head]    

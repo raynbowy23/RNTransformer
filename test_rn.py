@@ -7,7 +7,8 @@ import argparse
 
 from utils.metrics import * 
 from models.RNGCN import RNTransformer
-from data_loader import RoadNetwork, TrajectoryDataset
+from data_loader import TrajectoryDataset
+# from data_loader import RoadNetwork, TrajectoryDataset
 
 
 parser = argparse.ArgumentParser(description="Parameter Settings for Training")
