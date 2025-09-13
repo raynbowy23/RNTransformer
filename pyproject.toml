@@ -1,0 +1,49 @@
+[project]
+name = "peds"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.12"
+authors = [
+    { name = "raynbowy23", email = "tamaru@wisc.edu" },
+]
+
+
+dependencies = [
+    "einops>=0.8.1",
+    "numpy>=2.2.6",
+    "pandas>=2.3.2",
+    "polars>=1.33.1",
+    "pytz>=2025.2",
+    "scikit-learn>=1.7.2",
+    "tensorboard>=2.20.0",
+    "torch==2.5.1",
+    "torch-geometric>=2.6.1",
+    "torch-geometric-temporal",
+    "torch-scatter==2.1.2",
+    "torch-sparse",
+    "torch-cluster",
+    "torch-spline-conv",
+    "tqdm>=4.67.1",
+]
+
+[tool.uv.sources]
+torch = [{ index = "pytorch-cu124" }]
+
+torch-scatter = [{ index = "pyg-cu124" }]
+torch-sparse   = [{ index = "pyg-cu124" }]
+torch-cluster  = [{ index = "pyg-cu124" }]
+torch-spline-conv = [{ index = "pyg-cu124" }]
+pyg_lib           = [{ index = "pyg-cu124" }]
+
+
+[[tool.uv.index]]
+name = "pytorch-cu124"
+url = "https://download.pytorch.org/whl/cu124"
+explicit = true
+
+[[tool.uv.index]]
+name = "pyg-cu124"
+url = "https://data.pyg.org/whl/torch-2.5.1+cu124.html"
+format = "flat"
+explicit = true
