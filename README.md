@@ -1,6 +1,6 @@
-# Trip Modality: Pedestrian Trajectory Prediction with Crowd Trip Information
+# Enhancing Pedestrian Trajectory Prediction with Crowd Trip Information
 
-Paper will be uploaded soon.
+[Preprint](https://arxiv.org/abs/2409.15224)
 
 **[Rei Tamaru](https://reitamaru.com), [Pei Li](https://directory.engr.wisc.edu/cee/Staff/Li_Pei/), and Bin Ran**
 
@@ -97,5 +97,5 @@ You may change the image folder path to store the visualized results.
 
 ### TODO
 
-- [ ] Upload a paper
-- [ ] Further model training on the [Stanford Drone Dataset](https://cvgl.stanford.edu/projects/uav_data/).
+- [x] Upload a paper
+- [x] Further model training on the [Stanford Drone Dataset](https://cvgl.stanford.edu/projects/uav_data/).
