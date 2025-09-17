@@ -25,6 +25,7 @@ dependencies = [
     "torch-cluster",
     "torch-spline-conv",
     "tqdm>=4.67.1",
+    "mlflow>=3.3.2",
 ]
 
 [tool.uv.sources]

@@ -7,6 +7,7 @@ vis.ipynb
 /datasets/*/preprocessed/
 /checkpoints/
 /__pycache__/
+/mlruns
 /models/__pycache__/
 /models/TrajNetPlusPlus.py
 /models/PedsTrajNet.py

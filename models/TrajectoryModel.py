@@ -112,7 +112,7 @@ class TrajectoryModel(nn.Module):
                 ### Pretrained & Early Fusion
                 self.model_rn = model_rn
             else:
-                self.model_rn = RNTransformer(node_features=7, num_nodes=num_nodes, periods=periods, output_dim_list=out_list, device=device).to(device)
+                self.model_rn = RNTransformer(node_features=8, num_nodes=num_nodes, periods=periods, output_dim_list=out_list, device=device).to(device)
 
         if self.model_name == "social_stgcnn":
             if model_loc != None:

@@ -1,9 +1,11 @@
 import os
 import os.path as osp
+from pathlib import Path
 import math
 import pickle
 import torch
 from torch.utils.data import Dataset
+from torch_geometric.data import Data
 from torch_geometric_temporal import DynamicGraphTemporalSignal
 import numpy as np
 from sklearn.preprocessing import MinMaxScaler
@@ -87,11 +89,11 @@ class inDDatasetGraph(Dataset):
         self.is_preprocessed = is_preprocessed
 
         # Should be preprocessed
-        data_file_train = osp.join('datasets/inD-dataset-v1.0/preprocessed/all_train.pkl')
-        data_file_test = osp.join('datasets/inD-dataset-v1.0/preprocessed/all_test.pkl')
+        data_file_train = Path('datasets/inD-dataset-v1.0/preprocessed/all_train.pkl')
+        data_file_test = Path('datasets/inD-dataset-v1.0/preprocessed/all_test.pkl')
 
         self.max_peds_in_frame = 0
-        self.data_dir = osp.join(data_dir, 'data/')
+        self.data_dir = Path(data_dir, 'data/')
         self.num_timesteps_in = num_timesteps_in
         self.num_timesteps_out = num_timesteps_out
         # 25 FPS for inD --> 0.24 sec per frame
@@ -115,9 +117,9 @@ class inDDatasetGraph(Dataset):
         self.val_data_dir = 'datasets/inD-dataset-v1.0/preprocessed/val/'
 
         # Define the path in which the process data would be stored
-        self.data_file_tr = osp.join(self.train_data_dir, "trajectories_train_in{}_out{}.pkl".format(num_timesteps_in, num_timesteps_out))
-        self.data_file_te = osp.join(self.test_data_dir, "trajectories_test_in{}_out{}.pkl".format(num_timesteps_in, num_timesteps_out))
-        self.data_file_vl = osp.join(self.val_data_dir, "trajectories_val_in{}_out{}.pkl".format(num_timesteps_in, num_timesteps_out))
+        self.data_file_tr = Path(self.train_data_dir, "trajectories_train_in{}_out{}.pkl".format(num_timesteps_in, num_timesteps_out))
+        self.data_file_te = Path(self.test_data_dir, "trajectories_test_in{}_out{}.pkl".format(num_timesteps_in, num_timesteps_out))
+        self.data_file_vl = Path(self.val_data_dir, "trajectories_val_in{}_out{}.pkl".format(num_timesteps_in, num_timesteps_out))
 
         if self.is_preprocessed:
             if is_train:
@@ -341,15 +343,15 @@ class inDDatasetGraph(Dataset):
         return torch.from_numpy(V).type(torch.float),\
             torch.from_numpy(A).type(torch.float)
 
-    def __len__(self):
-        if self.is_preprocessed:
-            if self.is_train:
-                f = open(self.data_file_tr, "rb")
-            else:
-                f = open(self.data_file_te, "rb")
-            self.in_traj, self.pred_traj, self.in_traj_rel, self.pred_traj_rel, self.non_linear_ped, self.loss_mask, self.v_in, self.A_in, self.v_pred, self.A_pred, self.num_seq, self.seq_start_end = pickle.load(f)
-            f.close()
-        return self.num_seq
+    # def __len__(self):
+    #     if self.is_preprocessed:
+    #         if self.is_train:
+    #             f = open(self.data_file_tr, "rb")
+    #         else:
+    #             f = open(self.data_file_te, "rb")
+    #         self.in_traj, self.pred_traj, self.in_traj_rel, self.pred_traj_rel, self.non_linear_ped, self.loss_mask, self.v_in, self.A_in, self.v_pred, self.A_pred, self.num_seq, self.seq_start_end = pickle.load(f)
+    #         f.close()
+    #     return self.num_seq
     
     def __getitem__(self, index):
 
@@ -419,8 +421,8 @@ class TrajectoryDataset(Dataset):
         self.sc = MinMaxScaler(feature_range=(0, 1))
 
         # Should be preprocessed
-        # data_file_train = osp.join('datasets', dataset, 'preprocessed', 'all_train.pkl')
-        # data_file_test = osp.join('datasets', dataset, 'preprocessed', 'all_test.pkl')
+        # data_file_train = Path('datasets', dataset, 'preprocessed', 'all_train.pkl')
+        # data_file_test = Path('datasets', dataset, 'preprocessed', 'all_test.pkl')
 
         self.max_peds_in_frame = 0
         self.data_dir = data_dir
@@ -444,8 +446,8 @@ class TrajectoryDataset(Dataset):
         self.train_mode = train_mode
         self.is_normalize = is_normalize
 
-        all_files = os.listdir(osp.join(self.data_dir, self.sdd_loc, self.train_mode))
-        self.all_files = [osp.join(self.data_dir, self.sdd_loc, self.train_mode, _path) for _path in all_files]
+        all_files = os.listdir(Path(self.data_dir, self.sdd_loc, self.train_mode))
+        self.all_files = [Path(self.data_dir, self.sdd_loc, self.train_mode, _path) for _path in all_files]
 
         self.num_peds_in_seq = []
         self.seq_list = []
@@ -455,13 +457,13 @@ class TrajectoryDataset(Dataset):
         self.ped_list = []
 
         # List of data directories where raw data resides
-        self.load_data_dir = osp.join('datasets', self.dataset, 'preprocessed', self.sdd_loc, self.train_mode)
+        self.load_data_dir = Path('datasets', self.dataset, 'preprocessed', self.sdd_loc, self.train_mode)
 
         # Define the path in which the process data would be stored
         if self.is_normalize:
-            self.data_file = osp.join(self.load_data_dir, "trajnet_normalize_in{}_out{}_aggframe{}.pkl".format(self.in_channels, self.out_channels, self.agg_frame))
+            self.data_file = Path(self.load_data_dir, "trajnet_normalize_in{}_out{}_aggframe{}.pkl".format(self.in_channels, self.out_channels, self.agg_frame))
         else:
-            self.data_file = osp.join(self.load_data_dir, "trajnet_unnormalize_in{}_out{}_aggframe{}.pkl".format(self.in_channels, self.out_channels, self.agg_frame))
+            self.data_file = Path(self.load_data_dir, "trajnet_unnormalize_in{}_out{}_aggframe{}.pkl".format(self.in_channels, self.out_channels, self.agg_frame))
         f = self.data_file
 
         if self.is_preprocessed:
@@ -469,7 +471,8 @@ class TrajectoryDataset(Dataset):
                 self.loss_mask, self.v_in, self.A_in, self.v_pred, self.A_pred, self.num_seq, self.seq_start_end, \
                 self.min_rel_pred, self.max_rel_pred, self.ped_list = torch.load(f)
             if self.is_rn:
-                self.edge_index_list, self.edge_attr_list, self.node_data_list = torch.load(osp.join('datasets', self.dataset, 'preprocessed', self.sdd_loc, self.train_mode, 'roadnet_in{}_out{}_aggframe{}.pkl').format(self.in_channels, self.out_channels, self.agg_frame))
+                self.edge_index_list, self.edge_attr_list, self.node_data_list = torch.load(Path('datasets', self.dataset, 'preprocessed', self.sdd_loc, self.train_mode, \
+                                                                                                 'roadnet_in{}_out{}_aggframe{}.pkl'.format(self.in_channels, self.out_channels, self.agg_frame)))
         else:
             if dataset_iter == 0:
                 self.set_trajnet_graph()
@@ -478,10 +481,17 @@ class TrajectoryDataset(Dataset):
                 _, _, _, _, _, \
                     _, _, _, _, _, self.num_seq, _, _, _, self.ped_list = torch.load(f)
 
+        num_timesteps_total = len(self.node_data_list)
+
+        self.indices = [
+            (i, i + (in_channels + rn_out_channels))
+            for i in range(num_timesteps_total - (in_channels + rn_out_channels) + 1)
+        ]
+
 
     @property
     def processed_file_names(self):
-        return osp.join(self.data_dir, 'preprocessed', self.sdd_loc, self.train_mode, 'trajnet_in{}_out{}_aggframe{}.pt'.format(self.in_channels, self.out_channels, self.agg_frame))
+        return Path(self.data_dir, 'preprocessed', self.sdd_loc, self.train_mode, 'trajnet_in{}_out{}_aggframe{}.pt'.format(self.in_channels, self.out_channels, self.agg_frame))
 
 
     def read_file(self, _path, delim='\t', is_rn=False):
@@ -722,7 +732,7 @@ class TrajectoryDataset(Dataset):
                 self.edge_attr_list.append(self.edge_attr)
 
         torch.save((self.edge_index_list, self.edge_attr_list, self.node_data_list),
-                    osp.join('datasets', self.dataset, 'preprocessed', self.sdd_loc, self.train_mode, 'roadnet_in{}_out{}_aggframe{}.pkl').format(self.in_channels, self.out_channels, self.agg_frame))
+                    Path('datasets', self.dataset, 'preprocessed', self.sdd_loc, self.train_mode, 'roadnet_in{}_out{}_aggframe{}.pkl').format(self.in_channels, self.out_channels, self.agg_frame))
 
 
     def set_trajnet_graph(self):
@@ -752,15 +762,8 @@ class TrajectoryDataset(Dataset):
                 math.ceil((len(frames_loc[p_id]) - self.seq_len + 1) / self.skip))
 
             print("Preparing Data .....")
-            # pbar = tqdm(total=int(len(frame_data_loc) * self.use_ratio))
-            # pbar = tqdm(total=num_sequences * self.skip + 1)
-            # for idx in pbar:
-            # for idx in range(int(len(frame_data_loc) * self.use_ratio)):
 
             for idx in range(0, num_sequences * self.skip + 1, self.skip):
-                # pbar.update(self.skip)
-                # pbar.update(1)
-
                 curr_seq_data = np.concatenate(
                     frame_data_loc[idx:idx + self.skip * self.seq_len:self.skip], axis=0)
                 peds_in_curr_seq = np.unique(curr_seq_data[:, 1])
@@ -828,13 +831,6 @@ class TrajectoryDataset(Dataset):
             for start, end in zip(cum_start_idx, cum_start_idx[1:])
         ]
 
-        # sum_of_lists = [len(frames_loc[i]) for i in range(len(frames_loc))]
-        
-        # self.seq_start_end = [
-        #     (i, i + (self.in_channels + self.out_channels))
-        #     for i in range(math.ceil((sum(sum_of_lists) - self.seq_len + 1) / self.skip))
-        # ]
-
 
         # Convert to Graphs 
         self.v_in = [] 
@@ -847,9 +843,7 @@ class TrajectoryDataset(Dataset):
         print("Processing Data .....")
         ### This should be timesteps differences?
         pbar = tqdm(total=len(self.seq_start_end) - len(self.seq_start_end) % self.skip) 
-        # pbar = tqdm(total=len(self.seq_start_end)) 
         for ss in range(len(self.seq_start_end) - len(self.seq_start_end) % self.skip):
-        # for ss in range(len(self.seq_start_end)):
             pbar.update(1)
             
             start, end = self.seq_start_end[ss]
@@ -871,12 +865,12 @@ class TrajectoryDataset(Dataset):
             torch.save((self.in_traj, self.pred_traj, self.in_traj_rel, self.pred_traj_rel, 
                         self.non_linear_ped, self.loss_mask, self.v_in, self.A_in, self.v_pred, 
                         self.A_pred, self.num_seq, self.seq_start_end, self.min_rel_pred, self.max_rel_pred, self.ped_list),  
-                        osp.join('datasets', self.dataset, 'preprocessed', self.sdd_loc, self.train_mode, 'trajnet_normalize_in{}_out{}_aggframe{}.pkl').format(self.in_channels, self.out_channels, self.agg_frame))
+                        Path('datasets', self.dataset, 'preprocessed', self.sdd_loc, self.train_mode, 'trajnet_normalize_in{}_out{}_aggframe{}.pkl').format(self.in_channels, self.out_channels, self.agg_frame))
         else:
             torch.save((self.in_traj, self.pred_traj, self.in_traj_rel, self.pred_traj_rel, 
                         self.non_linear_ped, self.loss_mask, self.v_in, self.A_in, self.v_pred, 
                         self.A_pred, self.num_seq, self.seq_start_end, self.min_rel_pred, self.max_rel_pred, self.ped_list),  
-                        osp.join('datasets', self.dataset, 'preprocessed', self.sdd_loc, self.train_mode, 'trajnet_unnormalize_in{}_out{}_aggframe{}.pkl').format(self.in_channels, self.out_channels, self.agg_frame))
+                        Path('datasets', self.dataset, 'preprocessed', self.sdd_loc, self.train_mode, 'trajnet_unnormalize_in{}_out{}_aggframe{}.pkl').format(self.in_channels, self.out_channels, self.agg_frame))
 
 
     def seq_to_graph(self, seq_, seq_rel, is_sc=False):
@@ -955,64 +949,20 @@ class TrajectoryDataset(Dataset):
                 edge_index[0][len(node_idx)*i+j] = node_idx[i] # src list
                 edge_index[1][len(node_idx)*i+j] = node_idx[j] # dst list
 
-        # edge_attr = None
-        # edge_attrs = [torch.ones(1) for _ in range(node_num**2)]
-        # edge_attr = torch.cat(edge_attrs, dim=-1)
-        # edge_attr = torch.cat(od_grid, dim=-1)
-
         return edge_index, od_grid.view(-1)
 
 
     def __len__(self):
-        # return len(self.processed_file_names)
         return math.floor(self.num_seq / self.skip)
 
+    def __getitem__(self, idx):
+        i, j = self.indices[idx]
+        x_list = self.node_data_list[i:i+self.in_channels]
+        y_list = [frame[:, -1] for frame in self.node_data_list[i+self.in_channels:j]]
 
-    def get(self, num_timesteps_in, num_timesteps_out) -> DynamicGraphTemporalSignal:
-        features = []
-        target = []
-        edge_index_out = []
-        edge_attr_out = []
+        x = torch.stack(x_list, dim=-1).float()
+        y = torch.stack(y_list, dim=-1).float()
 
-        # edge_index, edge_attr, node_data = torch.load(osp.join('datasets', self.dataset, 'preprocessed', self.sdd_loc, self.train_mode, 'roadnet_in{}_out{}_aggframe{}.pkl').format(self.in_channels, self.out_channels, self.agg_frame))
-        
-        node_data = torch.stack(self.node_data_list, dim=1).permute(0, 2, 1)
-        node_data = torch.as_tensor(node_data)
-
-
-        # self.edge_index_list = torch.stack(self.edge_index_list, dim=1)
-        self.edge_attr_list = torch.stack(self.edge_attr_list, dim=1).permute(1, 0)
-
-        indices = [
-            (i, i + (num_timesteps_in + num_timesteps_out))
-            for i in range(node_data.shape[2] - (num_timesteps_in + num_timesteps_out) + 1)
-        ]
-        
-        for i, j in indices:
-            features.append((node_data[:, :-1, i:i+num_timesteps_in]).numpy())
-            target.append((node_data[:, -1, i+num_timesteps_in:j]).numpy())
-            edge_index_out.append(np.asarray(self.edge_index_list[i:i+num_timesteps_in]))
-            edge_attr_out.append(np.asarray(self.edge_attr_list[i:i+num_timesteps_in]))
-
-        
-
-        data = DynamicGraphTemporalSignal(edge_index_out, edge_attr_out, features, target)
-        # data = Data(x=features, edge_index=edge_index_out, edge_attr=edge_attr_out, y=target)
-        # data = StaticGraphTemporalSignal(self.edge_index, self.edge_attr, features, target)
-
-        return data
-
-
-    def __getitem__(self, index):
-
-        start, end = self.seq_start_end[index]
-        out = [
-            self.in_traj[start:end, :], self.pred_traj[start:end, :],
-            self.in_traj_rel[start:end, :], self.pred_traj_rel[start:end, :],
-            self.non_linear_ped[start:end], self.loss_mask[start:end, :],
-            self.v_in[index], self.A_in[index],
-            self.v_pred[index], self.A_pred[index],
-            torch.stack(self.min_rel_pred)[index], torch.stack(self.max_rel_pred)[index],
-            self.ped_list[index],
-        ]
-        return out
+        edge_index = torch.as_tensor(self.edge_index_list[i], dtype=torch.long)
+        edge_attr = torch.as_tensor(self.edge_attr_list[i], dtype=torch.float)
+        return Data(x=x, edge_index=edge_index, edge_attr=edge_attr, y=y)
