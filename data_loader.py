@@ -1,12 +1,11 @@
 import os
-import os.path as osp
 from pathlib import Path
 import math
 import pickle
 import torch
+import torch.serialization
 from torch.utils.data import Dataset
 from torch_geometric.data import Data
-from torch_geometric_temporal import DynamicGraphTemporalSignal
 import numpy as np
 from sklearn.preprocessing import MinMaxScaler
 import polars as pl
@@ -464,22 +463,21 @@ class TrajectoryDataset(Dataset):
             self.data_file = Path(self.load_data_dir, "trajnet_normalize_in{}_out{}_aggframe{}.pkl".format(self.in_channels, self.out_channels, self.agg_frame))
         else:
             self.data_file = Path(self.load_data_dir, "trajnet_unnormalize_in{}_out{}_aggframe{}.pkl".format(self.in_channels, self.out_channels, self.agg_frame))
-        f = self.data_file
 
         if self.is_preprocessed:
             self.in_traj, self.pred_traj, self.in_traj_rel, self.pred_traj_rel, self.non_linear_ped, \
                 self.loss_mask, self.v_in, self.A_in, self.v_pred, self.A_pred, self.num_seq, self.seq_start_end, \
-                self.min_rel_pred, self.max_rel_pred, self.ped_list = torch.load(f)
+                self.min_rel_pred, self.max_rel_pred, self.ped_list = torch.load(self.data_file)
             if self.is_rn:
                 self.edge_index_list, self.edge_attr_list, self.node_data_list = torch.load(Path('datasets', self.dataset, 'preprocessed', self.sdd_loc, self.train_mode, \
-                                                                                                 'roadnet_in{}_out{}_aggframe{}.pkl'.format(self.in_channels, self.out_channels, self.agg_frame)))
+                                                                                                 'roadnet_in{}_out{}_aggframe{}_grid{}.pkl'.format(self.in_channels, self.out_channels, self.agg_frame, self.grid)))
         else:
             if dataset_iter == 0:
                 self.set_trajnet_graph()
             if is_rn:
                 self.set_roadnet_graph()
                 _, _, _, _, _, \
-                    _, _, _, _, _, self.num_seq, _, _, _, self.ped_list = torch.load(f)
+                    _, _, _, _, _, self.num_seq, _, _, _, self.ped_list = torch.load(self.data_file)
 
         num_timesteps_total = len(self.node_data_list)
 
@@ -488,11 +486,9 @@ class TrajectoryDataset(Dataset):
             for i in range(num_timesteps_total - (in_channels + rn_out_channels) + 1)
         ]
 
-
     @property
     def processed_file_names(self):
         return Path(self.data_dir, 'preprocessed', self.sdd_loc, self.train_mode, 'trajnet_in{}_out{}_aggframe{}.pt'.format(self.in_channels, self.out_channels, self.agg_frame))
-
 
     def read_file(self, _path, delim='\t', is_rn=False):
         data = []
@@ -509,7 +505,6 @@ class TrajectoryDataset(Dataset):
                 data.append(line)
 
         return np.asarray(data)
-
 
     def read_file_sdd(self, _path, delim='\t'):
         data = []
@@ -732,7 +727,7 @@ class TrajectoryDataset(Dataset):
                 self.edge_attr_list.append(self.edge_attr)
 
         torch.save((self.edge_index_list, self.edge_attr_list, self.node_data_list),
-                    Path('datasets', self.dataset, 'preprocessed', self.sdd_loc, self.train_mode, 'roadnet_in{}_out{}_aggframe{}.pkl').format(self.in_channels, self.out_channels, self.agg_frame))
+                    Path('datasets', self.dataset, 'preprocessed', self.sdd_loc, self.train_mode, 'roadnet_in{}_out{}_aggframe{}_grid{}.pkl'.format(self.in_channels, self.out_channels, self.agg_frame, self.grid)))
 
 
     def set_trajnet_graph(self):
@@ -863,14 +858,14 @@ class TrajectoryDataset(Dataset):
         # Save the arrays in the pickle file
         if self.is_normalize:
             torch.save((self.in_traj, self.pred_traj, self.in_traj_rel, self.pred_traj_rel, 
-                        self.non_linear_ped, self.loss_mask, self.v_in, self.A_in, self.v_pred, 
-                        self.A_pred, self.num_seq, self.seq_start_end, self.min_rel_pred, self.max_rel_pred, self.ped_list),  
-                        Path('datasets', self.dataset, 'preprocessed', self.sdd_loc, self.train_mode, 'trajnet_normalize_in{}_out{}_aggframe{}.pkl').format(self.in_channels, self.out_channels, self.agg_frame))
+                        self.non_linear_ped, self.loss_mask, self.v_in, self.A_in, self.v_pred,
+                        self.A_pred, self.num_seq, self.seq_start_end, self.min_rel_pred, self.max_rel_pred, self.ped_list),
+                        Path('datasets', self.dataset, 'preprocessed', self.sdd_loc, self.train_mode, 'trajnet_normalize_in{}_out{}_aggframe{}_grid{}.pkl'.format(self.in_channels, self.out_channels, self.agg_frame, self.grid)))
         else:
-            torch.save((self.in_traj, self.pred_traj, self.in_traj_rel, self.pred_traj_rel, 
-                        self.non_linear_ped, self.loss_mask, self.v_in, self.A_in, self.v_pred, 
-                        self.A_pred, self.num_seq, self.seq_start_end, self.min_rel_pred, self.max_rel_pred, self.ped_list),  
-                        Path('datasets', self.dataset, 'preprocessed', self.sdd_loc, self.train_mode, 'trajnet_unnormalize_in{}_out{}_aggframe{}.pkl').format(self.in_channels, self.out_channels, self.agg_frame))
+            torch.save((self.in_traj, self.pred_traj, self.in_traj_rel, self.pred_traj_rel,
+                        self.non_linear_ped, self.loss_mask, self.v_in, self.A_in, self.v_pred,
+                        self.A_pred, self.num_seq, self.seq_start_end, self.min_rel_pred, self.max_rel_pred, self.ped_list),
+                        Path('datasets', self.dataset, 'preprocessed', self.sdd_loc, self.train_mode, 'trajnet_unnormalize_in{}_out{}_aggframe{}_grid{}.pkl'.format(self.in_channels, self.out_channels, self.agg_frame, self.grid)))
 
 
     def seq_to_graph(self, seq_, seq_rel, is_sc=False):

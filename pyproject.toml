@@ -26,6 +26,7 @@ dependencies = [
     "torch-spline-conv",
     "tqdm>=4.67.1",
     "mlflow>=3.3.2",
+    "seaborn>=0.13.2",
 ]
 
 [tool.uv.sources]

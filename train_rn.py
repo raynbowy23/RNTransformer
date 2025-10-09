@@ -198,10 +198,6 @@ for param_tensor in model_rn.state_dict():
     total_param += np.prod(model_rn.state_dict()[param_tensor].size())
 print('Net\'s total params:', total_param)
 
-def huber_loss(rn_pred, rn_gt):
-    h_loss = torch.nn.HuberLoss('mean', delta=0.1)
-    return h_loss(rn_pred, rn_gt)
-
 def multi_horizon_loss(predictions, targets, delta=0.1):
     h_loss = torch.nn.HuberLoss('mean', delta=delta)
     losses = []
