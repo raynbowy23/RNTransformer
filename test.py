@@ -1,28 +1,27 @@
 import os
-from os import path as osp
-import torch
-import pickle
-import matplotlib.pyplot as plt
-from torch.utils.data import DataLoader
+import copy
 import argparse
+from pathlib import Path
+from tqdm import tqdm
+import seaborn as sns
+import matplotlib.pyplot as plt
+
+import pickle
+import torch
+from torch.utils.data import DataLoader
 import torch.distributions.multivariate_normal as torchdist
+from collections import OrderedDict
+from scipy.ndimage import gaussian_filter
+
 from utils.metrics import * 
-from models.TrajectoryModel import TrajectoryModel
 from data_loader import inDDatasetGraph, TrajectoryDataset
 from models.TrajectoryModel import *
-import copy
-from tqdm import tqdm
-import argparse
-from collections import OrderedDict
-
-import seaborn as sns
-
 
 parser = argparse.ArgumentParser(description="Parameter Settings for Training")
 
 parser.add_argument('--pretrained_file', default="model_9.pt",
                 help="Path to pretrained file which wants to be validated")
-# --- Input ---
+
 # dataset options
 parser.add_argument('--dataset_dir', default="./datasets/",
                 help="Path to directory that contains the dataset csv files.", type=str)
@@ -108,17 +107,17 @@ print("*"*50)
 print('Number of samples:', KSTEPS)
 print("*"*50)
 
-model_path = osp.join(opt.pretrained_dir, opt.model_name, opt.pretrained_file) # '/val_best.pth'
+model_path = Path(opt.pretrained_dir, opt.model_name, opt.pretrained_file) # '/val_best.pth'
 
 # Data prep     
 obs_seq_len = opt.num_timesteps_in
 pred_seq_len = opt.num_timesteps_out
 
-
 def load_data(opt):
-    dataset_dir = osp.join(opt.dataset_dir, opt.dataset)
+    dataset_dir = Path(opt.dataset_dir, opt.dataset)
 
     print(obs_seq_len, pred_seq_len)
+    test_loader_list = []
 
     if opt.dataset == 'inD-dataset-v1.0':
         test_dataset = inDDatasetGraph(
@@ -133,18 +132,17 @@ def load_data(opt):
             dataset=opt.dataset,
             sdd_loc=opt.sdd_loc)
 
-        test_loader = DataLoader(
-                test_dataset,
-                batch_size=1, # This is irrelative to the args batch size parameter
-                shuffle=False,
-                num_workers=1)
+        # test_loader = DataLoader(
+        #         test_dataset,
+        #         batch_size=1, # This is irrelative to the args batch size parameter
+        #         shuffle=False,
+        #         num_workers=1)
     else:
         if opt.is_rn:
             out_list = [1, 4, 8]
         else:
             out_list = [opt.num_timesteps_out]
 
-        test_rn_loader_list = []
 
         for i in range(len(out_list)):
             test_dataset = TrajectoryDataset(
@@ -165,30 +163,19 @@ def load_data(opt):
                     is_normalize=opt.is_normalize)
 
             if opt.is_rn:
-                test_rn_dataset = test_dataset.get(opt.rn_num_timesteps_in, out_list[i])
-                test_rn_loader_list.append(test_rn_dataset)
+                test_rn_loader_list.append(test_dataset)
 
-            if i == 0:
-                test_loader = DataLoader(
-                        test_dataset,
-                        batch_size=1,
-                        shuffle=False,
-                        num_workers=0)
+            # if i == 0:
+            #     test_loader = DataLoader(
+            #             test_dataset,
+            #             batch_size=1,
+            #             shuffle=False,
+            #             num_workers=0)
 
     if opt.is_rn:
         return test_loader, test_rn_loader_list
     else:
         return test_loader
-
-
-def world2image(traj_w, H_inv):
-    # Converts points from Euclidean to homogeneous space, by (x, y) → (x, y, 1)
-    traj_homog = np.hstack((traj_w, np.ones((traj_w.shape[0], 1)))).T  
-    # to camera frame
-    traj_cam = np.matmul(H_inv, traj_homog)  
-    # to pixel coords
-    traj_uvz = np.transpose(traj_cam/traj_cam[2]) 
-    return traj_uvz[:, :2].astype(int)    
 
 def get_closer_index(key, query):
     diff = np.linalg.norm(query - key, axis=-2).sum(-1)
@@ -212,7 +199,7 @@ def obtain_limits(model_data, normal_xy_ratio=True):
     y_len = y_max - y_min
     
     if normal_xy_ratio:
-        if x_len/y_len > 3.5/4.5:  # the x/y ratio of plot region in the figure is about 3.5/4.5. 
+        if x_len/y_len > 3.5/4.5: # the x/y ratio of plot region in the figure is about 3.5/4.5. 
             # y_len is too small
             y_center = (y_max + y_min) / 2
             y_len = x_len / 3.5 * 4.5
@@ -283,7 +270,6 @@ def visualize(raw_data_dic_, out_list, gt_list):
     dset = opt.dataset
 
     out_, gt_, gt2_ = [], [], []
-    from scipy.ndimage import gaussian_filter
 
     _out_list, _gt_list = [], [] # 36 grids
     if opt.dataset == 'eth':
@@ -355,11 +341,10 @@ def visualize(raw_data_dic_, out_list, gt_list):
         plt.imshow(data_smoothed, cmap='coolwarm', interpolation='nearest', alpha=0.6, extent=[x_limit[0], x_limit[1], y_limit[0], y_limit[1]], aspect='auto')
 
         plt.tight_layout()
-        plt.savefig(osp.join('../', 'figs', '{}_{}_in{}_out_{}_pretrained{}_frames{}.png'.format(opt.model_name, opt.dataset, opt.num_timesteps_in, opt.num_timesteps_out, opt.pretrained_epoch, key)),
+        plt.savefig(Path('../', 'figs', '{}_{}_in{}_out_{}_pretrained{}_frames{}.png'.format(opt.model_name, opt.dataset, opt.num_timesteps_in, opt.num_timesteps_out, opt.pretrained_epoch, key)),
                 dpi=300,
                 bbox_inches='tight')
         plt.show()
-
 
     plt.close()
 
@@ -388,7 +373,6 @@ def test(test_loader, test_rn_dataset=None, KSTEPS=20):
     m_collect = []
     eig_collect = []
 
-
     if opt.is_rn:
         if len(test_rn_dataset) == 1:
             pbar = tqdm(enumerate(zip(test_loader, test_rn_dataset[0])))
@@ -403,19 +387,15 @@ def test(test_loader, test_rn_dataset=None, KSTEPS=20):
         loc_data = []
 
         if opt.is_rn:
-            ### Train Local Peds Trajectory
             # Get data
             for tensor in batch[0]:
                 if not isinstance(tensor, list):
                     loc_data.append(tensor.to(device))
                 else:
                     loc_data.append(tensor)
-            # loc_data = [tensor.to(device) for tensor in batch[0][:-3]]
-            # Get data
             x = [batch[i].x.to(device) for i in range(1, len(batch))]
             y = [batch[i].y.to(device) for i in range(1, len(batch))]
         else:
-            # loc_data = [tensor.to(device) for tensor in batch]
             for tensor in batch:
                 if not isinstance(tensor, list):
                     loc_data.append(tensor.to(device))
@@ -499,7 +479,6 @@ def test(test_loader, test_rn_dataset=None, KSTEPS=20):
         for n in range(num_of_objs):
             coll_ls[n] = []
             coll_step_ls[n] = []
-
 
         b_samples = []
         for k in range(KSTEPS):
@@ -665,36 +644,34 @@ if __name__ == '__main__':
     model_rn = None
     model_loc = None
     # model_rn = RNTransformer(node_features=7, num_nodes=num_nodes, periods=opt.num_timesteps_in, output_dim_list=out_list, device=device).to(device)
-    # model_path = osp.join(opt.pretrained_dir, 'road_network', 'eth', '{}_model_grid{}_outlist{}_{}_{}_epoch{}.pt'.format(11, opt.grid, out_list[0], out_list[1], out_list[2], 50))
+    # model_path = Path(opt.pretrained_dir, 'road_network', 'eth', '{}_model_grid{}_outlist{}_{}_{}_epoch{}.pt'.format(11, opt.grid, out_list[0], out_list[1], out_list[2], 50))
     # model_rn.load_state_dict(torch.load(model_path))
     model = TrajectoryModel(in_channels=opt.num_timesteps_in, out_channels=opt.num_timesteps_out,
                                 num_nodes=num_nodes, out_list=out_list, periods=opt.num_timesteps_in, 
-                            depth=1, mlp_dim=128, device=device, is_rn=opt.is_rn, model_name=opt.model_name, model_loc=model_loc, model_rn=model_rn).to(device)
+                                depth=1, mlp_dim=128, device=device, is_rn=opt.is_rn, model_name=opt.model_name, model_loc=model_loc, model_rn=model_rn).to(device)
 
     # Check if pretrained model exists
     if opt.pretrained_epoch == None:
         if opt.is_rn:
-            model.load_state_dict(torch.load(osp.join(opt.pretrained_dir, opt.model_name, opt.dataset, '{}_val_rn_best.pt'.format(opt.uid)), map_location='cuda:0'))
+            model.load_state_dict(torch.load(Path(opt.pretrained_dir, opt.model_name, opt.dataset, '{}_val_rn_best.pt'.format(opt.uid)), map_location='cuda:0'))
         else:
-            model.load_state_dict(torch.load(osp.join(opt.pretrained_dir, opt.model_name, opt.dataset, '{}_val_best.pt'.format(opt.uid))))
+            model.load_state_dict(torch.load(Path(opt.pretrained_dir, opt.model_name, opt.dataset, '{}_val_best.pt'.format(opt.uid))))
     else:
         if opt.dataset == 'sdd':
             d_name = 'sdd'
         else:
             d_name = 'eth'
         if opt.is_rn:
-            model.load_state_dict(torch.load(osp.join(opt.pretrained_dir, opt.model_name, opt.dataset, '{}_model_grid{}_epoch{}.pt'.format(opt.uid, opt.grid, opt.pretrained_epoch)), map_location='cuda:0'))
+            model.load_state_dict(torch.load(Path(opt.pretrained_dir, opt.model_name, opt.dataset, '{}_model_grid{}_epoch{}.pt'.format(opt.uid, opt.grid, opt.pretrained_epoch)), map_location='cuda:0'))
         else:
-            model.load_state_dict(torch.load(osp.join(opt.pretrained_dir, opt.model_name, opt.dataset, '{}_model_{}.pt'.format(opt.uid, opt.pretrained_epoch))))
+            model.load_state_dict(torch.load(Path(opt.pretrained_dir, opt.model_name, opt.dataset, '{}_model_{}.pt'.format(opt.uid, opt.pretrained_epoch))))
 
     total_param = 0
     for param_tensor in model.state_dict():
-        # print("{}, {}".format(param_tensor, model.state_dict()[param_tensor].size()))
         total_param += np.prod(model.state_dict()[param_tensor].size())
-        # print(model.state_dict()[param_tensor].size())
     print('Net\'s total params:', total_param)
 
-    stats = osp.join(opt.pretrained_dir, opt.model_name, opt.dataset, 'constant_metrics.pkl')
+    stats = Path(opt.pretrained_dir, opt.model_name, opt.dataset, 'constant_metrics.pkl')
     with open(stats, 'rb') as f:
         cm = pickle.load(f)
     print("Stats:", cm)

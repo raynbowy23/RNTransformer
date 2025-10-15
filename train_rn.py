@@ -13,8 +13,7 @@ import mlflow
 
 from utils.metrics import *
 from models.RNGCN import RNTransformer
-from data_loader import TrajectoryDataset
-from utils.static_graph_temporal_signal import temporal_signal_split
+from data_loader import RoadNetworkDataset
 
 log_path = './logs'
 os.makedirs(log_path, exist_ok=True)
@@ -107,54 +106,37 @@ def load_data(opt):
     dataset_dir = Path(opt.dataset_dir, opt.dataset)
     global out_list
 
-    if opt.dataset == 'inD-dataset-v1.0':
-        print("Load Road Network")
-        road_network = RoadNetwork(dataset_dir, opt.train_num, opt.test_num, opt.rn_num, 
-                                   opt.grid, opt.agg_frame, num_timesteps_in=opt.rn_num_timesteps_in, 
-                                   num_timesteps_out=opt.rn_num_timesteps_out, is_preprocessed=opt.is_rn_preprocessed)
-        dataset = road_network.get_dataset() 
-        train_rn_dataset, test_rn_dataset = temporal_signal_split(dataset, train_ratio=opt.tr)
-    else:
-        print("Load Road Network")
-        out_list = [1, 4, 8]
-        road_network = [object for _ in range(len(out_list))]
-        train_rn_loader_list, test_rn_loader_list = [], []
-        for i in range(len(out_list)):
-            train_dataset = TrajectoryDataset(
-                    dataset_dir,
-                    sdd_loc=opt.sdd_loc,
-                    in_channels=opt.rn_num_timesteps_in,
-                    out_channels=opt.rn_num_timesteps_out,
-                    rn_out_channels=out_list[i],
-                    agg_frame=opt.agg_frame,
-                    skip=opt.skip,
-                    grid=opt.grid,
-                    norm_lap_matr=True,
-                    is_preprocessed=opt.is_rn_preprocessed,
-                    dataset_iter=i,
-                    dataset=opt.dataset,
-                    train_mode='train',
-                    is_rn=opt.is_rn,
-                    is_normalize=opt.is_normalize)
+    print("Load Road Network")
+    out_list = [1, 4, 8]
+    train_rn_loader_list, test_rn_loader_list = [], []
+    for i in range(len(out_list)):
+        train_dataset = RoadNetworkDataset(
+                dataset_dir,
+                sdd_loc=opt.sdd_loc,
+                in_channels=opt.rn_num_timesteps_in,
+                out_channels=opt.rn_num_timesteps_out,
+                rn_out_channels=out_list[i],
+                agg_frame=opt.agg_frame,
+                skip=opt.skip,
+                grid=opt.grid,
+                is_preprocessed=opt.is_rn_preprocessed,
+                dataset=opt.dataset,
+                train_mode='train')
 
-            test_dataset = TrajectoryDataset(
-                    dataset_dir,
-                    sdd_loc=opt.sdd_loc,
-                    in_channels=opt.rn_num_timesteps_in,
-                    out_channels=opt.rn_num_timesteps_out,
-                    rn_out_channels=out_list[i],
-                    agg_frame=opt.agg_frame,
-                    skip=opt.skip,
-                    grid=opt.grid,
-                    norm_lap_matr=True,
-                    is_preprocessed=opt.is_rn_preprocessed,
-                    dataset_iter=i,
-                    dataset=opt.dataset,
-                    train_mode='val',
-                    is_rn=opt.is_rn,
-                    is_normalize=opt.is_normalize)
-            train_rn_loader_list.append(train_dataset)
-            test_rn_loader_list.append(test_dataset)
+        test_dataset = RoadNetworkDataset(
+                dataset_dir,
+                sdd_loc=opt.sdd_loc,
+                in_channels=opt.rn_num_timesteps_in,
+                out_channels=opt.rn_num_timesteps_out,
+                rn_out_channels=out_list[i],
+                agg_frame=opt.agg_frame,
+                skip=opt.skip,
+                grid=opt.grid,
+                is_preprocessed=opt.is_rn_preprocessed,
+                dataset=opt.dataset,
+                train_mode='val')
+        train_rn_loader_list.append(train_dataset)
+        test_rn_loader_list.append(test_dataset)
 
     return train_rn_loader_list, test_rn_loader_list
 
