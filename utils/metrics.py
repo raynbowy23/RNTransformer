@@ -30,7 +30,7 @@ def ade_loss(predAll, targetAll, count_):
 #TODO: Implementation: Average Absolute Heading Error
 
 # Average Displacement Error
-def ade(predAll, targetAll, count_):
+def ade(predAll, targetAll, count_=1):
     All = len(predAll)
     sum_all = 0
     sum_all1 = 0 

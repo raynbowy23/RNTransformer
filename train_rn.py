@@ -144,12 +144,12 @@ def load_data(opt):
 train_rn_dataset, test_rn_dataset = load_data(opt)
 
 train_loaders = [
-    DataLoader(ds, batch_size=16, shuffle=True)
+    DataLoader(ds, batch_size=16, shuffle=True, drop_last=True)
     for ds in train_rn_dataset
 ]
 
 test_loaders = [
-    DataLoader(ds, batch_size=16, shuffle=False)
+    DataLoader(ds, batch_size=16, shuffle=False, drop_last=True)
     for ds in test_rn_dataset
 ]
 
@@ -201,7 +201,7 @@ def train_rn(train_loader):
         edge_attr_list = [batch.edge_attr for batch in batches]
 
         optimizer_rn.zero_grad()
-        predictions = model_rn(x_list, edge_index_list, edge_attr_list)
+        predictions, rn_emb = model_rn(x_list, edge_index_list, edge_attr_list)
 
         batch_loss = multi_horizon_loss(predictions, y_list, delta=0.1)
         batch_loss.backward()
@@ -227,7 +227,7 @@ def test_rn(test_loader):
         edge_index_list = [batch.edge_index for batch in batches]
         edge_attr_list = [batch.edge_attr for batch in batches]
 
-        predictions = model_rn(x_list, edge_index_list, edge_attr_list)
+        predictions, rn_emb = model_rn(x_list, edge_index_list, edge_attr_list)
 
         for i in range(n_horizon):
             mse = ((predictions[i] - y_list[i]) ** 2).mean()
@@ -259,12 +259,10 @@ def main():
         mlflow.log_metric("train_loss", train_loss, step=epoch)
 
         if epoch % 10 == 0:
-            if len(out_list) == 1:
-                torch.save(model_rn.state_dict(), Path(opt.pretrained_dir, 'road_network', opt.dataset, '{}_model_grid{}_outlist{}_epoch{}.pt'.format(opt.uid, opt.grid, out_list[0], epoch)))
-            elif len(out_list) == 2:
-                torch.save(model_rn.state_dict(), Path(opt.pretrained_dir, 'road_network', opt.dataset, '{}_model_grid{}_outlist{}_{}_epoch{}.pt'.format(opt.uid, opt.grid, out_list[0], out_list[1], epoch)))
-            elif len(out_list) == 3:
-                torch.save(model_rn.state_dict(), Path(opt.pretrained_dir, 'road_network', opt.dataset, '{}_model_grid{}_outlist{}_{}_{}_epoch{}.pt'.format(opt.uid, opt.grid, out_list[0], out_list[1], out_list[2], epoch)))
+            out_string = ''
+            for out in out_list:
+                out_string += str(out) + '_'
+            torch.save(model_rn.state_dict(), Path(opt.pretrained_dir, 'road_network', opt.dataset, '{}_model_grid{}_outlist{}epoch{}.pt'.format(opt.uid, opt.grid, out_string, 10)))
         if opt.use_lrschd:
             scheduler.step()
 

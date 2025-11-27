@@ -7,7 +7,7 @@ from torch_geometric.loader import DataLoader
 from utils.static_graph_temporal_signal import temporal_signal_split
 
 from models.RNGCN import RNTransformer
-from data_loader import TrajectoryDataset #, RoadNetwork
+from data_loader import RoadNetworkDataset, TrajectoryDataset #, RoadNetwork
 from utils.metrics import * 
 
 
@@ -100,7 +100,7 @@ def load_data(opt):
         test_rn_loader_list = []
         for i in range(len(out_list)):            
 
-            test_dataset = TrajectoryDataset(
+            test_dataset = RoadNetworkDataset(
                     dataset_dir,
                     sdd_loc=opt.sdd_loc,
                     in_channels=opt.rn_num_timesteps_in,
@@ -108,13 +108,9 @@ def load_data(opt):
                     rn_out_channels=out_list[i],
                     agg_frame=opt.agg_frame,
                     skip=opt.skip,
-                    norm_lap_matr=True,
                     is_preprocessed=opt.is_rn_preprocessed,
-                    dataset_iter=i,
                     dataset=opt.dataset,
-                    train_mode='test',
-                    is_rn=opt.is_rn,
-                    is_normalize=opt.is_normalize)
+                    train_mode='test')
             test_rn_loader_list.append(test_dataset)
 
     return test_rn_loader_list
@@ -123,7 +119,7 @@ def load_data(opt):
 test_rn_dataset = load_data(opt)
 
 test_loaders = [
-    DataLoader(ds, batch_size=16, shuffle=False)
+    DataLoader(ds, batch_size=16, shuffle=False, drop_last=True)
     for ds in test_rn_dataset
 ]
 
@@ -132,13 +128,10 @@ num_node_features = 8
 num_nodes = len(next(iter(test_rn_dataset[0])).x)
 print(out_list)
 
-if len(out_list) == 1:
-    model_path = Path(opt.pretrained_dir, 'road_network', opt.dataset, '{}_model_grid{}_outlist{}_epoch{}.pt'.format(opt.uid, opt.grid, out_list[0], opt.pretrained_epoch))
-elif len(out_list) == 2:
-    model_path = Path(opt.pretrained_dir, 'road_network', opt.dataset, '{}_model_grid{}_outlist{}_{}_epoch{}.pt'.format(opt.uid, opt.grid, out_list[0], out_list[1], opt.pretrained_epoch))
-elif len(out_list) == 3:
-    model_path = Path(opt.pretrained_dir, 'road_network', opt.dataset, '{}_model_grid{}_outlist{}_{}_{}_epoch{}.pt'.format(opt.uid, opt.grid, out_list[0], out_list[1], out_list[2], opt.pretrained_epoch))
-
+out_string = 'outlist'
+for out in out_list:
+    out_string += str(out) + '_'
+model_path = Path(opt.pretrained_dir, 'road_network', opt.dataset, '{}_model_grid{}_{}epoch{}.pt'.format(opt.uid, opt.grid, out_string, 10))
 model_rn = RNTransformer(node_features=num_node_features, num_nodes=num_nodes, periods=opt.rn_num_timesteps_in, output_dim_list=out_list, device=device).to(device)
 model_rn.load_state_dict(torch.load(model_path, weights_only=True))
 
@@ -157,7 +150,7 @@ def test_rn():
         edge_index_list = [batch.edge_index for batch in batches]
         edge_attr_list = [batch.edge_attr for batch in batches]
 
-        predictions = model_rn(x_list, edge_index_list, edge_attr_list)
+        predictions, _ = model_rn(x_list, edge_index_list, edge_attr_list)
 
         for i in range(n_horizon):
             horizon_losses[i].append(((predictions[i] - y_list[i])**2).mean())

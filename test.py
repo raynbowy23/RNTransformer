@@ -3,18 +3,21 @@ import copy
 import argparse
 from pathlib import Path
 from tqdm import tqdm
+import numpy as np
 import seaborn as sns
 import matplotlib.pyplot as plt
+from sklearn.decomposition import PCA
+from sklearn.manifold import TSNE
 
 import pickle
 import torch
-from torch.utils.data import DataLoader
 import torch.distributions.multivariate_normal as torchdist
+from torch_geometric.loader import DataLoader
 from collections import OrderedDict
 from scipy.ndimage import gaussian_filter
 
 from utils.metrics import * 
-from data_loader import inDDatasetGraph, TrajectoryDataset
+from data_loader import inDDatasetGraph, TrajectoryDataset, RoadNetworkDataset
 from models.TrajectoryModel import *
 
 parser = argparse.ArgumentParser(description="Parameter Settings for Training")
@@ -74,6 +77,10 @@ parser.add_argument('--is_rn', action="store_true", default=False,
                 help="If road network is taken in the learning phase")
 parser.add_argument('--is_preprocessed', action="store_true", default=False,
                 help="If preprocessed file exists")
+parser.add_argument('--is_rn_preprocessed', action="store_true", default=False,
+                help="If RoadNetwork preprocessed file exists")
+parser.add_argument('--load_preprocessed', action="store_true", default=False,
+                help="If RoadNetwork preprocessed file exists")
 parser.add_argument('--tr', '--train_ratio', default=0.8, type=float,
                 help="Train ratio")
 parser.add_argument('--fusion', default=None, type=str,
@@ -88,6 +95,8 @@ parser.add_argument('--is_normalize', action="store_true", default=False,
                 help="If you want to normalize")
 parser.add_argument('--uid', default=0, type=int,
                 help="Unique ID")
+parser.add_argument('--rn_uid', default=0, type=int,
+                help="Unique ID for Road Network model")
 
 opt = parser.parse_args()
 
@@ -117,7 +126,6 @@ def load_data(opt):
     dataset_dir = Path(opt.dataset_dir, opt.dataset)
 
     print(obs_seq_len, pred_seq_len)
-    test_loader_list = []
 
     if opt.dataset == 'inD-dataset-v1.0':
         test_dataset = inDDatasetGraph(
@@ -143,39 +151,136 @@ def load_data(opt):
         else:
             out_list = [opt.num_timesteps_out]
 
+        test_dataset = TrajectoryDataset(
+                dataset_dir,
+                sdd_loc=opt.sdd_loc,
+                in_channels=opt.num_timesteps_in,
+                out_channels=opt.num_timesteps_out,
+                agg_frame=opt.agg_frame,
+                skip=opt.skip,
+                grid=opt.grid,
+                norm_lap_matr=True,
+                is_preprocessed=opt.is_preprocessed,
+                dataset=opt.dataset,
+                train_mode='test',
+                is_rn=opt.is_rn,
+                is_normalize=opt.is_normalize)
 
+        test_loader = DataLoader(
+                test_dataset,
+                batch_size=1,
+                shuffle=False,
+                num_workers=0)
+
+        test_rn_loader_list = []
         for i in range(len(out_list)):
-            test_dataset = TrajectoryDataset(
+
+            test_rn_dataset = RoadNetworkDataset(
                     dataset_dir,
                     sdd_loc=opt.sdd_loc,
-                    in_channels=opt.num_timesteps_in,
-                    out_channels=opt.num_timesteps_out,
+                    in_channels=opt.rn_num_timesteps_in,
+                    out_channels=opt.rn_num_timesteps_out,
                     rn_out_channels=out_list[i],
                     agg_frame=opt.agg_frame,
                     skip=opt.skip,
                     grid=opt.grid,
-                    norm_lap_matr=True,
-                    is_preprocessed=opt.is_preprocessed,
+                    is_preprocessed=opt.is_rn_preprocessed,
                     dataset=opt.dataset,
-                    dataset_iter=i,
-                    train_mode='test',
-                    is_rn=opt.is_rn,
-                    is_normalize=opt.is_normalize)
+                    train_mode='val')
 
             if opt.is_rn:
-                test_rn_loader_list.append(test_dataset)
-
-            # if i == 0:
-            #     test_loader = DataLoader(
-            #             test_dataset,
-            #             batch_size=1,
-            #             shuffle=False,
-            #             num_workers=0)
+                test_rn_loader_list.append(test_rn_dataset)
 
     if opt.is_rn:
         return test_loader, test_rn_loader_list
     else:
         return test_loader
+
+h = None
+out_list = [1, 4, 8]
+num_nodes = 0
+
+if opt.is_rn:
+    test_loader, test_rn_dataset = load_data(opt)
+
+    test_rn_loaders = [
+        DataLoader(ds, batch_size=1, shuffle=False)
+        for ds in test_rn_dataset
+    ]
+else:
+    test_loader = load_data(opt)
+
+### Model saving directory
+print("===> Save model to %s" % opt.pretrained_dir)
+
+os.makedirs(opt.pretrained_dir, exist_ok=True)
+
+if opt.is_rn:
+    print("===== Initializing model for time horizon =====")
+    num_nodes = len(next(iter(test_rn_loaders[0])).x)
+    print(num_nodes)
+
+### Model setup
+print("===== Initializing model for trajectory prediction =====")
+if opt.is_rn:
+    out_string = ''
+    for out in out_list:
+        out_string += str(out) + '_'
+    rn_checkpoint_path = Path(opt.pretrained_dir, 'road_network', opt.dataset, '{}_model_grid{}_outlist{}epoch{}.pt'.format(opt.rn_uid, opt.grid, out_string, 10))
+
+    rn_config = {
+        'node_features': 8,
+        'num_nodes': len(next(iter(test_rn_dataset[0])).x),
+        'periods': opt.num_timesteps_in,
+        'output_dim_list': [1, 4, 8],
+        'device': device
+    }
+    
+    model_rn = RNTransformer(**rn_config).to(device)
+    model_rn.load_state_dict(torch.load(rn_checkpoint_path, weights_only=True))
+
+    ### Freeze the parameters
+    for param in model_rn.parameters():
+        param.requires_grad = False
+else:
+    model_rn = None
+
+model = TrajectoryModel(opt, num_nodes=num_nodes, out_list=out_list, device=device).to(device)
+
+# Check if pretrained model exists
+if opt.pretrained_epoch == None:
+    if opt.is_rn:
+        model.load_state_dict(torch.load(Path(opt.pretrained_dir, opt.model_name, opt.dataset, '{}_val_rn_best.pt'.format(opt.uid)), map_location='cuda:0'), strict=False)
+    else:
+        model.load_state_dict(torch.load(Path(opt.pretrained_dir, opt.model_name, opt.dataset, '{}_val_best.pt'.format(opt.uid))), strict=False)
+else:
+    if opt.dataset == 'sdd':
+        d_name = 'sdd'
+    else:
+        d_name = 'eth'
+    if opt.is_rn:
+        model.load_state_dict(torch.load(Path(opt.pretrained_dir, opt.model_name, opt.dataset, '{}_model_grid{}_epoch{}.pt'.format(opt.uid, opt.grid, opt.pretrained_epoch)), map_location='cuda:0'), strict=False)
+    else:
+        model.load_state_dict(torch.load(Path(opt.pretrained_dir, opt.model_name, opt.dataset, '{}_model_{}.pt'.format(opt.uid, opt.pretrained_epoch))), strict=False)
+
+total_param = 0
+for param_tensor in model.state_dict():
+    total_param += np.prod(model.state_dict()[param_tensor].size())
+print('Net\'s total params:', total_param)
+
+stats = Path(opt.pretrained_dir, opt.model_name, opt.dataset, 'constant_metrics.pkl')
+with open(stats, 'rb') as f:
+    cm = pickle.load(f)
+print("Stats:", cm)
+
+print(f'Pretrained Epoch: {opt.pretrained_epoch}')
+
+ade_all = 999999
+fde_all = 999999
+ade1, ade2, ade3  = 999999, 999999, 999999
+
+print("Testing ....")
+
 
 def get_closer_index(key, query):
     diff = np.linalg.norm(query - key, axis=-2).sum(-1)
@@ -225,7 +330,7 @@ def visualize(raw_data_dic_, out_list, gt_list):
     print(f'Modes: {raw_data_dic_[0].keys()}')
 
     # Image can be eth or eth2
-    img = plt.imread('figures/{}.jpg'.format(opt.dataset))
+    img = plt.imread('figures/{}.png'.format(opt.dataset))
     model_obs, model_trgt, model_pred = [], [], []
 
     for seq in range(len(raw_data_dic_)):
@@ -315,14 +420,14 @@ def visualize(raw_data_dic_, out_list, gt_list):
         # elif opt.dataset == 'univ':
         #     x_limit, y_limit = (-7.5070825, 0.0), (-3.064489568982806, 6.58747359684535)
 
-        if opt.is_rn:
-            for site_num in range(36):
-                out_ = out_list[2][ts][site_num][0]
-                g2_ = gt_list[2][ts][site_num][0]
-                _out_list.append(out_)
-                _gt_list.append(gt2_)
-            _out_reshaped = np.array(_out_list).reshape(6, 6)
-            data_smoothed = gaussian_filter(_out_reshaped, sigma=1)
+        # if opt.is_rn:
+        for site_num in range(36):
+            out_ = out_list[2][ts][site_num][0]
+            g2_ = gt_list[2][ts][site_num][0]
+            _out_list.append(out_)
+            _gt_list.append(gt2_)
+        _out_reshaped = np.array(_out_list).reshape(6, 6)
+        data_smoothed = gaussian_filter(_out_reshaped, sigma=1)
 
         sns.kdeplot(x=collect[key]['Prediction'][:, 0].reshape(-1),
                     y=collect[key]['Prediction'][:, 1].reshape(-1),
@@ -344,7 +449,7 @@ def visualize(raw_data_dic_, out_list, gt_list):
         plt.savefig(Path('../', 'figs', '{}_{}_in{}_out_{}_pretrained{}_frames{}.png'.format(opt.model_name, opt.dataset, opt.num_timesteps_in, opt.num_timesteps_out, opt.pretrained_epoch, key)),
                 dpi=300,
                 bbox_inches='tight')
-        plt.show()
+        # plt.show()
 
     plt.close()
 
@@ -352,7 +457,34 @@ def graph_loss(V_pred, V_target):
     return bivariate_loss(V_pred, V_target)
 
 @torch.no_grad()
-def test(test_loader, test_rn_dataset=None, KSTEPS=20):
+def precompute_rn_features(model_rn, test_rn_loaders):
+    """Pre-compute RN embeddings for all trajectory data"""
+    feature_cache = {}
+    logger.info("Pre-computing RN features for all trajectory data")
+    
+    if opt.load_preprocessed:
+        with open(Path(opt.pretrained_dir, 'road_network', opt.dataset, 'feature_cache_test.pkl'), 'rb') as f:
+            feature_cache = pickle.load(f)
+    else:
+        # Create a lightweight dataloader just for RN computation
+        for idx, batches in tqdm(enumerate(zip(*test_rn_loaders)), desc="Precomputing RN features"):
+            x_list = [batch.x.to(device) for batch in batches]
+            gt_list = [batch.y.to(device) for batch in batches]
+            edge_attr_list = [batch.edge_attr.to(device) for batch in batches]
+            edge_index_list = [batch.edge_index.to(device) for batch in batches]
+
+            # x_list, edge_index_list, edge_attr_list = batch.x, batch.edge_index, batch.edge_attr
+            rn_pred, rn_embed = model_rn(x_list, edge_index_list, edge_attr_list)
+            # logger.info(rn_pred)
+            feature_cache[idx] = (rn_pred, rn_embed.detach().cpu(), gt_list)
+
+        with open(Path(opt.pretrained_dir, 'road_network', opt.dataset, 'feature_cache_test.pkl'), 'wb') as f:
+            pickle.dump(feature_cache, f)
+
+    return feature_cache
+
+@torch.no_grad()
+def test(test_loader, KSTEPS=20, rn_feature_cache=None):
     model.eval()
     ade_bigls = [[] for _ in range(4)]
     rn_pred_list = [[] for _ in range(3)]
@@ -366,41 +498,21 @@ def test(test_loader, test_rn_dataset=None, KSTEPS=20):
     rn_loss = 0
     rn_loss1, rn_loss2, rn_loss3 = 0, 0, 0
     cnt = 0
-    rn_loss_list = [[] for _ in range(3)]
 
     mabs_loss = []
     kde_loss = []
     m_collect = []
     eig_collect = []
 
-    if opt.is_rn:
-        if len(test_rn_dataset) == 1:
-            pbar = tqdm(enumerate(zip(test_loader, test_rn_dataset[0])))
-        else:
-            pbar = tqdm(enumerate(zip(test_loader, test_rn_dataset[0], test_rn_dataset[1], test_rn_dataset[2])))
-    else:
-        pbar = tqdm(enumerate(test_loader))
-
-    for i, batch in pbar: 
-        pbar.update(1)
+    for idx, batch in enumerate(tqdm(test_loader)): 
         cnt += 1
         loc_data = []
 
-        if opt.is_rn:
-            # Get data
-            for tensor in batch[0]:
-                if not isinstance(tensor, list):
-                    loc_data.append(tensor.to(device))
-                else:
-                    loc_data.append(tensor)
-            x = [batch[i].x.to(device) for i in range(1, len(batch))]
-            y = [batch[i].y.to(device) for i in range(1, len(batch))]
-        else:
-            for tensor in batch:
-                if not isinstance(tensor, list):
-                    loc_data.append(tensor.to(device))
-                else:
-                    loc_data.append(tensor)
+        for tensor in batch:
+            if not isinstance(tensor, list):
+                loc_data.append(tensor.to(device))
+            else:
+                loc_data.append(tensor)
 
         obs_traj, pred_traj_gt, obs_traj_rel, pred_traj_gt_rel, non_linear_ped,\
          loss_mask, V_obs, A_obs, V_tr, A_tr, min_rel_pred, max_rel_pred, ped_list = loc_data
@@ -409,21 +521,15 @@ def test(test_loader, test_rn_dataset=None, KSTEPS=20):
         V_obs_tmp = V_obs.permute(0, 3, 1, 2)
 
         if opt.is_rn:
-
-            rn_edge_index = [batch[i].edge_index.to(device) for i in range(1, len(batch))]
-            rn_edge_attr = [batch[i].edge_attr.to(device) for i in range(1, len(batch))]
+            precomputed_rn = rn_feature_cache[idx]
+            gt = precomputed_rn[2]
 
             ### Model in one piece
-            rn_pred, traj_pred = model(V_obs_tmp, A_obs, x, rn_edge_index, rn_edge_attr, ped_list=ped_list)
+            rn_pred, traj_pred, _ = model(V_obs_tmp, A_obs, ped_list=ped_list, precomputed_rn=precomputed_rn)
 
-            rn_loss1 += torch.mean((rn_pred[0] - y[0])**2).cpu()
-            rn_loss2 += torch.mean((rn_pred[1] - y[1])**2).cpu()
-            rn_loss3 += torch.mean((rn_pred[2] - y[2])**2).cpu()
             for j in range(len(rn_pred)):
-                rn_loss += torch.mean((rn_pred[j] - y[j])**2).cpu()
                 rn_pred_list[j].append(rn_pred[j].cpu().detach().numpy())
-                gt_list[j].append(y[j].cpu().detach().numpy())
-                rn_loss_list[j].append(torch.mean((rn_pred[j] - y[j])**2).cpu())
+                gt_list[j].append(gt[j].cpu().detach().numpy())
         else:
             if (V_obs_tmp.size(-1) == 0):
                 break
@@ -439,7 +545,6 @@ def test(test_loader, test_rn_dataset=None, KSTEPS=20):
         V_tr = V_tr.squeeze()
         A_tr = A_tr.squeeze()
         traj_pred = traj_pred.squeeze() #.float()
-        num_of_objs = obs_traj_rel.shape[1]
 
         if opt.model_name != "social_implicit":
             sx = torch.exp(traj_pred[:, :, 2]) #sx
@@ -466,11 +571,10 @@ def test(test_loader, test_rn_dataset=None, KSTEPS=20):
         V_y_rel_to_abs = nodes_rel_to_nodes_abs(V_tr.data.cpu().numpy().squeeze(),
                                                     V_x[-1, :, :].copy())
 
-        
-        raw_data_dict[i] = {}
-        raw_data_dict[i]['obs'] = copy.deepcopy(obs_traj.data.cpu().numpy().copy())
-        raw_data_dict[i]['trgt'] = copy.deepcopy(pred_traj_gt.data.cpu().numpy().copy())
-        raw_data_dict[i]['pred'] = []
+        raw_data_dict[idx] = {}
+        raw_data_dict[idx]['obs'] = copy.deepcopy(obs_traj.data.cpu().numpy().copy())
+        raw_data_dict[idx]['trgt'] = copy.deepcopy(pred_traj_gt.data.cpu().numpy().copy())
+        raw_data_dict[idx]['pred'] = []
 
         ade_ls = [[[] for _ in range(num_of_objs)] for _ in range(4)]
         fde_ls = [[] for _ in range(num_of_objs)]
@@ -490,7 +594,7 @@ def test(test_loader, test_rn_dataset=None, KSTEPS=20):
 
             V_pred_rel_to_abs = nodes_rel_to_nodes_abs(V_pred.data.cpu().numpy().squeeze().copy(),
                                                      V_x[-1, :, :].copy())
-            raw_data_dict[i]['pred'].append(copy.deepcopy(V_pred_rel_to_abs))
+            raw_data_dict[idx]['pred'].append(copy.deepcopy(V_pred_rel_to_abs))
             
             # b_samples.append(V_pred_rel_to_abs[:, :, None, :].copy())
 
@@ -568,7 +672,7 @@ def test(test_loader, test_rn_dataset=None, KSTEPS=20):
     rn_loss3 = rn_loss3 / cnt
 
     # return ade1_, fde_, raw_data_dict
-    return ade1_, ade2_, ade3_, ade4_, fde_, coll_, coll_cumulative_, raw_data_dict, rn_pred_list, gt_list, rn_loss_list #, #sum(kde_loss) / len(kde_loss), sum(mabs_loss) / len(mabs_loss), sum(eig_collect) / len(eig_collect), raw_data_dict
+    return ade1_, ade2_, ade3_, ade4_, fde_, coll_, coll_cumulative_, raw_data_dict, rn_pred_list, gt_list #, #sum(kde_loss) / len(kde_loss), sum(mabs_loss) / len(mabs_loss), sum(eig_collect) / len(eig_collect), raw_data_dict
 
 def rn_visualize(out_list, gt_list):
     out_, gt_, gt2_ = [], [], []
@@ -599,120 +703,55 @@ def rn_visualize(out_list, gt_list):
 
     plt.figure(figsize=(10, 10))
     sns.heatmap(data_smoothed, annot=False, fmt=".2f", cmap='coolwarm', cbar=False)
-    plt.imshow(data_smoothed, cmap='coolwarm', interpolation='nearest', alpha=0.6, extent=[], aspect='auto')
-    plt.show()
-
-
+    plt.imshow(data_smoothed, cmap='coolwarm', interpolation='nearest', alpha=0.6, aspect='auto')
+    plt.savefig("vis.png", dpi=300, bbox_inches='tight')
+    plt.close()
+    # plt.show()
 
 if __name__ == '__main__':
 
-
     ade_ls = [] 
+    ade1_ls = [] 
     ade2_ls = [] 
     ade3_ls = [] 
-    ade4_ls = [] 
     fde_ls = [] 
     kde_ls = []
     amd_ls = []
     eig_ls = []
     coll_ls = []
 
-    global out_list
+    rn_feature_cache = precompute_rn_features(model_rn, test_rn_loaders) if opt.is_rn else None
 
-    h = None
-    out_list = [1, 4, 8]
-    num_nodes = 0
-
-    if opt.is_rn:
-        test_loader, test_rn_dataset = load_data(opt)
-    else:
-        test_loader = load_data(opt)
-
-    ### Model saving directory
-    print("===> Save model to %s" % opt.pretrained_dir)
-
-    os.makedirs(opt.pretrained_dir, exist_ok=True)
-
-    global model, model_rn
-    if opt.is_rn:
-        print("===== Initializing model for time horizon =====")
-        num_nodes = len(next(iter(test_rn_dataset[0])).x)
-        print(num_nodes)
-
-    ### Model setup
-    print("===== Initializing model for trajectory prediction =====")
-    model_rn = None
-    model_loc = None
-    # model_rn = RNTransformer(node_features=7, num_nodes=num_nodes, periods=opt.num_timesteps_in, output_dim_list=out_list, device=device).to(device)
-    # model_path = Path(opt.pretrained_dir, 'road_network', 'eth', '{}_model_grid{}_outlist{}_{}_{}_epoch{}.pt'.format(11, opt.grid, out_list[0], out_list[1], out_list[2], 50))
-    # model_rn.load_state_dict(torch.load(model_path))
-    model = TrajectoryModel(in_channels=opt.num_timesteps_in, out_channels=opt.num_timesteps_out,
-                                num_nodes=num_nodes, out_list=out_list, periods=opt.num_timesteps_in, 
-                                depth=1, mlp_dim=128, device=device, is_rn=opt.is_rn, model_name=opt.model_name, model_loc=model_loc, model_rn=model_rn).to(device)
-
-    # Check if pretrained model exists
-    if opt.pretrained_epoch == None:
-        if opt.is_rn:
-            model.load_state_dict(torch.load(Path(opt.pretrained_dir, opt.model_name, opt.dataset, '{}_val_rn_best.pt'.format(opt.uid)), map_location='cuda:0'))
-        else:
-            model.load_state_dict(torch.load(Path(opt.pretrained_dir, opt.model_name, opt.dataset, '{}_val_best.pt'.format(opt.uid))))
-    else:
-        if opt.dataset == 'sdd':
-            d_name = 'sdd'
-        else:
-            d_name = 'eth'
-        if opt.is_rn:
-            model.load_state_dict(torch.load(Path(opt.pretrained_dir, opt.model_name, opt.dataset, '{}_model_grid{}_epoch{}.pt'.format(opt.uid, opt.grid, opt.pretrained_epoch)), map_location='cuda:0'))
-        else:
-            model.load_state_dict(torch.load(Path(opt.pretrained_dir, opt.model_name, opt.dataset, '{}_model_{}.pt'.format(opt.uid, opt.pretrained_epoch))))
-
-    total_param = 0
-    for param_tensor in model.state_dict():
-        total_param += np.prod(model.state_dict()[param_tensor].size())
-    print('Net\'s total params:', total_param)
-
-    stats = Path(opt.pretrained_dir, opt.model_name, opt.dataset, 'constant_metrics.pkl')
-    with open(stats, 'rb') as f:
-        cm = pickle.load(f)
-    print("Stats:", cm)
-
-    print(f'Pretrained Epoch: {opt.pretrained_epoch}')
-
-    ade_ = 999999
-    fde_ = 999999
-    ade2_, ade3_, ade4_  = 999999, 999999, 999999
-
-    print("Testing ....")
     test_num = 5
     for _ in range(test_num):
         if opt.is_rn:
             # ad, fd, kd, md, eg, raw_data_dic_= test(test_loader, test_rn_dataset)
             # ad, fd, raw_data_dic_= test(test_loader, test_rn_dataset)
-            ad, ad2, ad3, ad4, fd, coll_, coll_cum, raw_data_dic_, rn_pred_list, gt_list, rn_loss_list = test(test_loader, test_rn_dataset)
+            ad_all, ad1, ad2, ad3, fd_all, coll_, coll_cum, raw_data_dic_, rn_pred_list, gt_list = test(test_loader, rn_feature_cache=rn_feature_cache)
         else:
             # ad, fd, kd, md, eg, raw_data_dic_= test(test_loader)
             # ad, fd, raw_data_dic_= test(test_loader)
-            ad, ad2, ad3, ad4, fd, coll_, coll_cum, raw_data_dic_, rn_pred_list, gt_list, rn_loss_list = test(test_loader)
-        ade_ = min(ade_, ad)
-        fde_ = min(fde_, fd)
-        ade2_ = min(ade2_, ad2)
-        ade3_ = min(ade3_, ad3)
-        ade4_ = min(ade4_, ad4)
-        ade_ls.append(ade_)
-        ade2_ls.append(ade2_)
-        ade3_ls.append(ade3_)
-        ade4_ls.append(ade4_)
-        fde_ls.append(fde_)
+            ad_all, ad1, ad2, ad3, fd_all, coll_, coll_cum, raw_data_dic_, rn_pred_list, gt_list = test(test_loader)
+        ade_all = min(ade_all, ad_all)
+        fde_all = min(fde_all, fd_all)
+        ade1 = min(ade1, ad1)
+        ade2 = min(ade2, ad2)
+        ade3 = min(ade3, ad3)
+        ade_ls.append(ade_all)
+        ade1_ls.append(ade1)
+        ade2_ls.append(ade2)
+        ade3_ls.append(ade3)
+        fde_ls.append(fde_all)
         coll_ls.append(coll_)
         # kde_ls.append(kd)
         # amd_ls.append(md)
         # eig_ls.append(eg)
-        print("ADE:", ade_, " FDE:", fde_, " ADE1:", ade2_, " ADE2:", ade3_, " ADE4:", ade4_, " Coll:", coll_)#, " RN Loss1:", rn_loss_list[0], " RN Loss2:", rn_loss_list[1], " RN Loss3:", rn_loss_list[2]) #, "AMD:", md, "KDE:", kd, "AMV:", eg)
+        print("ADE:", ade_all, " FDE:", fde_all, " ADE1:", ade1, " ADE2:", ade2, " ADE3:", ade3, " Coll:", coll_)#, " RN Loss1:", rn_loss_list[0], " RN Loss2:", rn_loss_list[1], " RN Loss3:", rn_loss_list[2]) #, "AMD:", md, "KDE:", kd, "AMV:", eg)
 
     print("*"*50)
 
     print("Avg ADE:", sum(ade_ls) / test_num)
-    print("ADE First Period: {} Second Period: {} Third Period: {}".format(sum(ade2_ls)/test_num, sum(ade3_ls)/test_num, sum(ade4_ls)/test_num))
+    print("ADE First Period: {} Second Period: {} Third Period: {}".format(sum(ade1_ls)/test_num, sum(ade2_ls)/test_num, sum(ade3_ls)/test_num))
     print("Avg FDE:", sum(fde_ls) / test_num)
     print("Avg Coll:", sum(coll_ls) / test_num)
     # print("Avg AMD:", sum(amd_ls) / test_num)
@@ -723,7 +762,7 @@ if __name__ == '__main__':
     if opt.is_visualize:
         visualize(raw_data_dic_, rn_pred_list, gt_list)
 
-    # if opt.is_rn:
-    #     rn_visualize(rn_pred_list[0], gt_list[0])
+    if opt.is_rn:
+        rn_visualize(rn_pred_list[0], gt_list[0])
     #     # rn_visualize(rn_pred_list[1], gt_list[1])
     #     # rn_visualize(rn_pred_list[2], gt_list[2])

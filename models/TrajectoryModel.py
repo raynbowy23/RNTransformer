@@ -7,6 +7,10 @@ from models.SocialImplicit import SocialImplicit
 from models.SocialLSTM import SocialModel
 from models.RNGCN import RNTransformer
 
+import logging
+
+logger = logging.getLogger(__name__)
+
 class FeedForward(nn.Module):
     def __init__(self, dim, hidden_dim, dropout = 0.):
         super().__init__()
@@ -97,38 +101,37 @@ class FFTransformer(nn.Module):
 
 class TrajectoryModel(nn.Module):
 
-    def __init__(self, in_channels, out_channels, num_nodes, out_list, periods, depth, mlp_dim, heads=3, dim_head=8, dropout=0., device="gpu", 
-                 model_loc=None, model_rn=None, is_rn=True, model_name="trajectory_model"):
+    def __init__(self, opt, num_nodes, out_list, device="gpu", model_loc=None):
         super().__init__()
 
-        self.in_channels = in_channels
-        self.out_channels = out_channels
-        self.model_name = model_name
+        self.in_channels = opt.num_timesteps_in
+        self.out_channels = opt.num_timesteps_out
+        self.model_name = opt.model_name
+        self.periods = opt.num_timesteps_in
         self.out_list = out_list
         self.device = device
+        self.grid = 8 # opt.grid
+        self.is_rn = opt.is_rn
 
-        if is_rn:
-            if model_rn != None:
-                ### Pretrained & Early Fusion
-                self.model_rn = model_rn
-            else:
-                self.model_rn = RNTransformer(node_features=8, num_nodes=num_nodes, periods=periods, output_dim_list=out_list, device=device).to(device)
+        if self.is_rn:
+            self.model_rn = RNTransformer(node_features=8, num_nodes=num_nodes, periods=self.periods, output_dim_list=out_list, device=device).to(device)
 
         if self.model_name == "social_stgcnn":
             if model_loc != None:
                 self.model_loc = model_loc
             else:
-                self.model_loc = social_stgcnn(1, 5, output_feat=5, seq_len=in_channels, pred_seq_len=out_channels, num_nodes=num_nodes).to(device)
+                self.model_loc = social_stgcnn(1, 5, output_feat=5, seq_len=self.in_channels, pred_seq_len=self.out_channels, num_nodes=num_nodes).to(device)
         elif self.model_name == "social_implicit":
-            self.model_loc = SocialImplicit(temporal_output=out_channels, num_nodes=num_nodes).to(device)
+            self.model_loc = SocialImplicit(temporal_output=self.out_channels, num_nodes=num_nodes).to(device)
         elif self.model_name == "social_lstm":
-            self.model_loc = SocialModel(seq_len=out_channels, is_rn=is_rn).to(device)
-        self.is_rn = is_rn
+            self.model_loc = SocialModel(seq_len=self.out_channels, is_rn=self.is_rn).to(device)
+        self.is_rn = self.is_rn
       
         if self.is_rn:
-            self.linear_rn = torch.nn.Linear(13, out_channels)
+            # self.rn_proj = torch.nn.Linear(len(out_list) * 16, out_channels) # For rn_embed, 16 is hidden dim of RN
+            self.rn_proj = torch.nn.Linear(13, self.out_channels) # For rn_pred, sum of out_list
 
-            self.rn_norm = nn.LayerNorm(out_channels)
+            self.rn_norm = nn.LayerNorm(self.out_channels)
 
     def compute_l1_loss(self, w):
         return torch.abs(w).sum()
@@ -136,41 +139,25 @@ class TrajectoryModel(nn.Module):
     def compute_l2_loss(self, w):
         return torch.square(w).sum()
 
-    def forward(self, V, A, x=None, rn_edge_index=None, rn_edge_attr=None, ped_list=None, h_=None):
+    def forward(self, V, A, ped_list=None, precomputed_rn=None):
 
-        h = None
-        traj_pred = None
-        rn_out = [_ for _ in range(3)]
+        rn_embed = None
+        rn_pred = None
 
         if self.is_rn:
             ### Road Network
-            if h_ is not None:
-                rn_pred, rn_out[0], rn_out[1], rn_out[2] = self.model_rn(x, rn_edge_index, rn_edge_attr, h=h_.clone())
-            else:
-                rn_pred, rn_out[0], rn_out[1], rn_out[2] = self.model_rn(x, rn_edge_index, rn_edge_attr)
-
-            ## Flatten the output from RoadNetwork
-            out_rn = torch.cat((rn_out[0], rn_out[1], rn_out[2]), axis=1)
-
-            out_rn = self.rn_norm(self.linear_rn(out_rn))
-            
-            h = out_rn.clone()
-
+            if precomputed_rn is not None:
+                if len(precomputed_rn) == 2:
+                    rn_pred, rn_embed = precomputed_rn
+                else:
+                    rn_pred, rn_embed, _ = precomputed_rn
+                rn_embed = rn_embed.detach().to(self.device)
 
         ### Local Pedestrian Trajectory Network
-        if h is not None:
-            if self.model_name == "social_stgcnn":
-                traj_pred, _, _ = self.model_loc(V, A.squeeze(), h=h)
-            elif self.model_name == "social_lstm":
-                traj_pred, _, _ = self.model_loc(V, ped_list, h=h)
-            else:
-                traj_pred = self.model_loc(V, A.squeeze(), h=h)
+        if self.model_name == "social_stgcnn":
+            traj_pred, _, _ = self.model_loc(V, A.squeeze(), h=rn_embed)
+        elif self.model_name == "social_lstm":
+            traj_pred, _, _ = self.model_loc(V, ped_list, h=rn_embed)
         else:
-            if self.model_name == "social_stgcnn":
-                traj_pred, mid_loc, _ = self.model_loc(V, A.squeeze())
-            elif self.model_name == "social_lstm":
-                traj_pred, _, _ = self.model_loc(V, ped_list)
-            else:
-                traj_pred = self.model_loc(V, A.squeeze())
-
-        return rn_out, traj_pred
+            traj_pred, rn_fused = self.model_loc(V, A.squeeze(), rn_embed=rn_embed)
+        return rn_pred, traj_pred, rn_fused

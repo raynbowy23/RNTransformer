@@ -384,7 +384,6 @@ class TrajectoryDataset(Dataset):
                 sdd_loc: str='',
                 in_channels: int=8,
                 out_channels: int=8,
-                rn_out_channels: int=8,
                 grid: int=4,
                 threshold: float=0.002,
                 min_ped: int=1,
@@ -394,7 +393,6 @@ class TrajectoryDataset(Dataset):
                 agg_frame: int=20,
                 skip: int=1,
                 dataset: str='sdd',
-                dataset_iter: int=0,
                 train_mode: str='train',
                 is_rn: bool=False,
                 is_normalize: bool=False):
@@ -410,7 +408,6 @@ class TrajectoryDataset(Dataset):
         when using a linear predictor
         - min_ped: Minimum number of pedestrians that should be in a seqeunce
         - delim: Delimiter in the dataset files
-        - dataset_iter: Load local peds trajectory only at the first time
         - train_mode: train / test / val
         """
         super(TrajectoryDataset, self).__init__()
@@ -428,7 +425,6 @@ class TrajectoryDataset(Dataset):
         self.sdd_loc = sdd_loc
         self.in_channels = in_channels
         self.out_channels = out_channels
-        self.rn_out_channels = rn_out_channels
         self.seq_len = self.in_channels + self.out_channels
         self.delim = delim
         self.norm_lap_matr = norm_lap_matr
@@ -437,7 +433,6 @@ class TrajectoryDataset(Dataset):
         self.dataset = dataset
         self.grid = int(grid)
         self.agg_frame = int(agg_frame)
-        self.dataset_iter = dataset_iter
         # Ratio that you can use it for this dataset. Reduce it when you meet OOM.
         self.use_ratio = 1.0
         self.is_rn = is_rn
@@ -460,9 +455,9 @@ class TrajectoryDataset(Dataset):
 
         # Define the path in which the process data would be stored
         if self.is_normalize:
-            self.data_file = Path(self.load_data_dir, "trajnet_normalize_in{}_out{}_aggframe{}.pkl".format(self.in_channels, self.out_channels, self.agg_frame))
+            self.data_file = Path(self.load_data_dir, "trajnet_normalize_in{}_out{}_aggframe{}_grid{}.pkl".format(self.in_channels, self.out_channels, self.agg_frame, self.grid))
         else:
-            self.data_file = Path(self.load_data_dir, "trajnet_unnormalize_in{}_out{}_aggframe{}.pkl".format(self.in_channels, self.out_channels, self.agg_frame))
+            self.data_file = Path(self.load_data_dir, "trajnet_unnormalize_in{}_out{}_aggframe{}_grid{}.pkl".format(self.in_channels, self.out_channels, self.agg_frame, self.grid))
 
         if self.is_preprocessed:
             self.in_traj, self.pred_traj, self.in_traj_rel, self.pred_traj_rel, self.non_linear_ped, \
@@ -472,19 +467,11 @@ class TrajectoryDataset(Dataset):
                 self.edge_index_list, self.edge_attr_list, self.node_data_list = torch.load(Path('datasets', self.dataset, 'preprocessed', self.sdd_loc, self.train_mode, \
                                                                                                  'roadnet_in{}_out{}_aggframe{}_grid{}.pkl'.format(self.in_channels, self.out_channels, self.agg_frame, self.grid)))
         else:
-            if dataset_iter == 0:
-                self.set_trajnet_graph()
+            self.set_trajnet_graph()
             if is_rn:
                 self.set_roadnet_graph()
                 _, _, _, _, _, \
                     _, _, _, _, _, self.num_seq, _, _, _, self.ped_list = torch.load(self.data_file)
-
-        num_timesteps_total = len(self.node_data_list)
-
-        self.indices = [
-            (i, i + (in_channels + rn_out_channels))
-            for i in range(num_timesteps_total - (in_channels + rn_out_channels) + 1)
-        ]
 
     @property
     def processed_file_names(self):
@@ -671,7 +658,7 @@ class TrajectoryDataset(Dataset):
 
             node_num = (len(x_seg_list) - 1) ** 2
 
-            for frameId in tqdm(range(0, int(int(len(frames_rn) * self.use_ratio) / self.agg_frame))):
+            for frameId in range(0, int(int(len(frames_rn) * self.use_ratio) / self.agg_frame)):
                 ped_num_list = np.zeros((node_num))
                 car_num_list = np.zeros((node_num))
                 bik_num_list = np.zeros((node_num))
@@ -837,9 +824,7 @@ class TrajectoryDataset(Dataset):
 
         print("Processing Data .....")
         ### This should be timesteps differences?
-        pbar = tqdm(total=len(self.seq_start_end) - len(self.seq_start_end) % self.skip) 
         for ss in range(len(self.seq_start_end) - len(self.seq_start_end) % self.skip):
-            pbar.update(1)
             
             start, end = self.seq_start_end[ss]
 
@@ -853,7 +838,6 @@ class TrajectoryDataset(Dataset):
 
             self.min_rel_pred.append(min_rel)
             self.max_rel_pred.append(max_rel)
-        pbar.close()
 
         # Save the arrays in the pickle file
         if self.is_normalize:
@@ -1024,29 +1008,22 @@ class RoadNetworkDataset(Dataset):
         # if self.is_normalize:
         #     self.data_file = Path(self.load_data_dir, "trajnet_normalize_in{}_out{}_aggframe{}.pkl".format(self.in_channels, self.out_channels, self.agg_frame))
         # else:
-        self.data_file = Path(self.load_data_dir, "trajnet_unnormalize_in{}_out{}_aggframe{}.pkl".format(self.in_channels, self.out_channels, self.agg_frame))
-        f = self.data_file
+        # self.data_file = Path(self.load_data_dir, "trajnet_unnormalize_in{}_out{}_aggframe{}_grid{}.pkl".format(self.in_channels, self.out_channels, self.agg_frame, self.grid))
+        # f = self.data_file
 
         if self.is_preprocessed:
             self.edge_index_list, self.edge_attr_list, self.node_data_list = torch.load(Path('datasets', self.dataset, 'preprocessed', self.sdd_loc, self.train_mode, \
                                                                                                 'roadnet_in{}_out{}_aggframe{}_grid{}.pkl'.format(self.in_channels, self.out_channels, self.agg_frame, self.grid)))
         else:
             self._set_roadnet_graph()
-            _, _, _, _, _, \
-                _, _, _, _, _, self.num_seq, _, _, _, self.ped_list = torch.load(f)
+            # _, _, _, _, _, \
+            #     _, _, _, _, _, self.num_seq, _, _, _, self.ped_list = torch.load(f)
 
-
-        num_timesteps_total = len(self.node_data_list)
-
-        self.indices = [
-            (i, i + (in_channels + rn_out_channels))
-            for i in range(num_timesteps_total - (in_channels + rn_out_channels) + 1)
-        ]
 
     @property
     def processed_file_names(self):
         return Path('datasets', self.dataset, 'preprocessed', self.sdd_loc, self.train_mode, \
-                'roadnet_in{}_out{}_aggframe{}_grid{}.pkl'.format(self.in_channels, self.out_channels, self.agg_frame, self.grid))
+                'roadnet_in{}_out{}_aggframe{}_grid{}.pt'.format(self.in_channels, self.out_channels, self.agg_frame, self.grid))
 
     def _read_file(self, _path, delim='\t'):
         data = []
@@ -1178,7 +1155,7 @@ class RoadNetworkDataset(Dataset):
 
             node_num = (len(x_seg_list) - 1) ** 2
 
-            for frameId in tqdm(range(0, int(int(len(frames_rn) * self.use_ratio) / self.agg_frame))):
+            for frameId in range(0, int(int(len(frames_rn) * self.use_ratio) / self.agg_frame)):
                 ped_num_list = np.zeros((node_num))
                 car_num_list = np.zeros((node_num))
                 bik_num_list = np.zeros((node_num))
@@ -1233,8 +1210,34 @@ class RoadNetworkDataset(Dataset):
                 self.edge_index_list.append(self.edge_index)
                 self.edge_attr_list.append(self.edge_attr)
 
-        torch.save((self.edge_index_list, self.edge_attr_list, self.node_data_list),
-                    Path('datasets', self.dataset, 'preprocessed', self.sdd_loc, self.train_mode, 'roadnet_in{}_out{}_aggframe{}_grid{}.pkl'.format(self.in_channels, self.out_channels, self.agg_frame, self.grid)))
+        self.num_timesteps_total = len(self.node_data_list)
+
+        self.indices = [
+            (i, i + (self.in_channels + self.rn_out_channels))
+            for i in range(self.num_timesteps_total - (self.in_channels + self.rn_out_channels) + 1)
+        ]
+
+        # Preprocess and save the dataset
+        self.preprocessed = []
+        for idx in range(len(self.indices)):
+            i, j = self.indices[idx]
+
+            x = torch.stack(self.node_data_list[i:i+self.in_channels], dim=-1).float()
+            y = torch.stack([f[:, -1] for f in self.node_data_list[i+self.in_channels:j]], dim=-1).float()
+
+            self.preprocessed.append(
+                Data(
+                    x=x,
+                    edge_index=torch.as_tensor(self.edge_index_list[i], dtype=torch.long),
+                    edge_attr=torch.as_tensor(self.edge_attr_list[i], dtype=torch.float),
+                    y=y
+                )
+            )
+
+        torch.save(self.preprocessed,
+                    Path('datasets', self.dataset, 'preprocessed', self.sdd_loc, self.train_mode, 'roadnet_in{}_out{}_aggframe{}_grid{}.pt'.format(self.in_channels, self.out_channels, self.agg_frame, self.grid)))
+        # torch.save((self.edge_index_list, self.edge_attr_list, self.node_data_list),
+        #             Path('datasets', self.dataset, 'preprocessed', self.sdd_loc, self.train_mode, 'roadnet_in{}_out{}_aggframe{}_grid{}.pkl'.format(self.in_channels, self.out_channels, self.agg_frame, self.grid)))
 
 
     def _create_edge(self, road_grid, ped_od):
@@ -1284,16 +1287,19 @@ class RoadNetworkDataset(Dataset):
 
     def __len__(self):
         # return len(self.indices)
-        return math.floor(self.num_seq / self.skip)
+        # print(f"self.indices: {len(self.indices)}")
+        # print(f"self.num_timesteps_total: {self.num_timesteps_total}")
+        return math.floor(len(self.indices) / self.skip)
 
     def __getitem__(self, idx):
-        i, j = self.indices[idx]
-        x_list = self.node_data_list[i:i+self.in_channels]
-        y_list = [frame[:, -1] for frame in self.node_data_list[i+self.in_channels:j]]
+        # i, j = self.indices[idx]
+        # x_list = self.node_data_list[i:i+self.in_channels]
+        # y_list = [frame[:, -1] for frame in self.node_data_list[i+self.in_channels:j]]
 
-        x = torch.stack(x_list, dim=-1).float()
-        y = torch.stack(y_list, dim=-1).float()
+        # x = torch.stack(x_list, dim=-1).float()
+        # y = torch.stack(y_list, dim=-1).float()
 
-        edge_index = torch.as_tensor(self.edge_index_list[i], dtype=torch.long)
-        edge_attr = torch.as_tensor(self.edge_attr_list[i], dtype=torch.float)
-        return Data(x=x, edge_index=edge_index, edge_attr=edge_attr, y=y)
+        # edge_index = torch.as_tensor(self.edge_index_list[i], dtype=torch.long)
+        # edge_attr = torch.as_tensor(self.edge_attr_list[i], dtype=torch.float)
+        # return Data(x=x, edge_index=edge_index, edge_attr=edge_attr, y=y)
+        return self.preprocessed[idx]
